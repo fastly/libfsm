@@ -48,10 +48,40 @@ void
 fsm_free(struct fsm *fsm);
 
 /*
+ * Internal free function that invokes free(3) by default, or a user-provided
+ * free function to free memory and perform any custom memory tracking or handling
+ */
+void
+f_free(const struct fsm *fsm, void *p);
+
+/*
+ * Internal malloc function that invokes malloc(3) by default, or a user-provided
+ * malloc function to allocate memory and perform any custom memory tracking or handling
+ */
+void *
+f_malloc(const struct fsm *fsm, size_t sz);
+
+/*
+ * Internal realloc function that invokes realloc(3) by default, or a user-provided
+ * realloc function to re-allocate memory to the specified size and perform
+ * any custom memory tracking or handling
+ */
+void *
+f_realloc(const struct fsm *fsm, void *p, size_t sz);
+
+/*
  * Duplicate an FSM.
  */
 struct fsm *
 fsm_clone(const struct fsm *fsm);
+
+/* Returns the options of an FSM */
+const struct fsm_options *
+fsm_getoptions(const struct fsm *fsm);
+
+/* Sets the options of an FSM */
+void
+fsm_setoptions(struct fsm *fsm, const struct fsm_options *opts);
 
 /*
  * Copy the contents of src over dst, and free src.
@@ -147,7 +177,7 @@ fsm_setopaque(struct fsm *fsm, struct fsm_state *state, void *opaque);
  * Get data associated with an end state.
  */
 void *
-fsm_getopaque(struct fsm *fsm, const struct fsm_state *state);
+fsm_getopaque(const struct fsm *fsm, const struct fsm_state *state);
 
 /*
  * Return state (if there is just one), or add epsilon edges from all states,
@@ -210,6 +240,15 @@ fsm_state_duplicatesubgraphx(struct fsm *fsm, struct fsm_state *state,
  * Merge two states. A new state is returned.
  *
  * Cannot return NULL.
+ *
+ * Formally, this defines an _equivalence relation_ between the two states.
+ * These are joined and the language of the resulting FSM is a superset of
+ * the given FSM; the FSM produced is a _quotient automaton_.
+ *
+ * Since the NFA in libfsm are in general Thompson NFA (i.e. with epsilon
+ * transitions), merging states here preserves their epsilon edges. This
+ * differs from Hopcroft & Ullman's definition of an equivalence relation,
+ * which is done wrt the power set of each state.
  */
 struct fsm_state *
 fsm_mergestates(struct fsm *fsm, struct fsm_state *a, struct fsm_state *b);
@@ -277,18 +316,12 @@ struct fsm *
 fsm_concat(struct fsm *a, struct fsm *b);
 
 /*
- * Subtract b from a. This is not commutative.
- */
-struct fsm *
-fsm_subtract(struct fsm *a, struct fsm *b);
-
-/*
  * Return 1 if the fsm does not match anything;
  * 0 if anything matches (including the empty string),
  * or -1 on error.
  */
 int
-fsm_empty(struct fsm *fsm);
+fsm_empty(const struct fsm *fsm);
 
 /*
  * Return 1 if two fsm are equal, 0 if they're not,

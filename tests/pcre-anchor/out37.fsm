@@ -1,0 +1,10 @@
+
+0 -> 1 'a';
+1 -> 2 'b';
+2 -> 3 'c';
+
+# a$c$ is unsatisfiable, and effectively gets removed
+
+start: 0;
+end:   3;
+

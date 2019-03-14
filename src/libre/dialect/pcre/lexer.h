@@ -18,8 +18,12 @@ enum lx_pcre_token {
 	TOK_NEGATE,
 	TOK_CLOSEFLAGS,
 	TOK_OPENFLAGS,
+	TOK_INVALID,
+	TOK_NOESC,
 	TOK_HEX,
 	TOK_OCT,
+	TOK_NAMED__CHAR__CLASS,
+	TOK_CONTROL,
 	TOK_ESC,
 	TOK_ALT,
 	TOK_ANY,
@@ -48,18 +52,17 @@ struct lx_pos {
 
 struct lx_pcre_lx {
 	int (*lgetc)(struct lx_pcre_lx *lx);
-	void *opaque;
+	void *getc_opaque;
 
 	int c; /* lx_pcre_ungetc buffer */
 
 	struct lx_pos start;
 	struct lx_pos end;
 
-	void *buf;
-	int  (*push) (struct lx_pcre_lx *lx, char c);
-	void (*pop)  (struct lx_pcre_lx *lx);
-	int  (*clear)(struct lx_pcre_lx *lx);
-	void (*free) (struct lx_pcre_lx *lx);
+	void *buf_opaque;
+	int  (*push) (void *buf_opaque, char c);
+	int  (*clear)(void *buf_opaque);
+	void (*free) (void *buf_opaque);
 
 	enum lx_pcre_token (*z)(struct lx_pcre_lx *lx);
 };
@@ -106,10 +109,9 @@ const char *lx_pcre_example(enum lx_pcre_token (*z)(struct lx_pcre_lx *), enum l
 void lx_pcre_init(struct lx_pcre_lx *lx);
 enum lx_pcre_token lx_pcre_next(struct lx_pcre_lx *lx);
 
-int  lx_pcre_dynpush(struct lx_pcre_lx *lx, char c);
-void lx_pcre_dynpop(struct lx_pcre_lx *lx);
-int  lx_pcre_dynclear(struct lx_pcre_lx *lx);
-void lx_pcre_dynfree(struct lx_pcre_lx *lx);
+int  lx_pcre_dynpush(void *buf_opaque, char c);
+int  lx_pcre_dynclear(void *buf_opaque);
+void lx_pcre_dynfree(void *buf_opaque);
 
 #endif
 

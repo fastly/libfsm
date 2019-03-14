@@ -17,12 +17,14 @@
 #include <fsm/fsm.h>
 #include <fsm/bool.h>
 #include <fsm/pred.h>
-#include <fsm/out.h>
+#include <fsm/print.h>
 #include <fsm/options.h>
 
 #include <re/re.h>
 
 #include "libfsm/internal.h" /* XXX */
+#include "libre/re_comp.h" /* XXX */
+#include "libre/print.h" /* XXX */
 
 /*
  * TODO: accepting a delimiter would be useful: /abc/. perhaps provide that as
@@ -32,6 +34,7 @@
  */
 
 struct match {
+	int i;
 	const char *s;
 	struct match *next;
 };
@@ -41,10 +44,10 @@ static struct fsm_options opt;
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: re    [-r <dialect>] [-niusyz] [-x] <re> ... [ <text> | -- <text> ... ]\n");
-	fprintf(stderr, "       re    [-r <dialect>] [-niusyz] {-q <query>} <re> ...\n");
-	fprintf(stderr, "       re -p [-r <dialect>] [-niusyz] [-l <language>] [-acwX] [-k <io>] [-e <prefix>] <re> ...\n");
-	fprintf(stderr, "       re -m [-r <dialect>] [-niusyz] <re> ...\n");
+	fprintf(stderr, "usage: re    [-r <dialect>] [-nbiusyz] [-x] <re> ... [ <text> | -- <text> ... ]\n");
+	fprintf(stderr, "       re    [-r <dialect>] [-nbiusyz] {-q <query>} <re> ...\n");
+	fprintf(stderr, "       re -p [-r <dialect>] [-nbiusyz] [-l <language>] [-acwX] [-k <io>] [-e <prefix>] <re> ...\n");
+	fprintf(stderr, "       re -m [-r <dialect>] [-nbiusyz] <re> ...\n");
 	fprintf(stderr, "       re -h\n");
 }
 
@@ -81,28 +84,40 @@ io(const char *name)
 	exit(EXIT_FAILURE);
 }
 
-static enum fsm_out
-language(const char *name)
+static void
+print_name(const char *name,
+	fsm_print **print_fsm, re_ast_print **print_ast)
 {
 	size_t i;
 
 	struct {
 		const char *name;
-		enum fsm_out format;
+		fsm_print    *print_fsm;
+		re_ast_print *print_ast;
 	} a[] = {
-		{ "api",  FSM_OUT_API  },
-		{ "c",    FSM_OUT_C    },
-		{ "csv",  FSM_OUT_CSV  },
-		{ "dot",  FSM_OUT_DOT  },
-		{ "fsm",  FSM_OUT_FSM  },
-		{ "json", FSM_OUT_JSON }
+		{ "api",    fsm_print_api,    NULL  },
+		{ "c",      fsm_print_c,      NULL  },
+		{ "dot",    fsm_print_dot,    NULL  },
+		{ "fsm",    fsm_print_fsm,    NULL  },
+		{ "ir",     fsm_print_ir,     NULL  },
+		{ "irjson", fsm_print_irjson, NULL  },
+		{ "json",   fsm_print_json,   NULL  },
+
+		{ "tree",   NULL, re_ast_print_tree },
+		{ "abnf",   NULL, re_ast_print_abnf },
+		{ "ast",    NULL, re_ast_print_dot  },
+		{ "pcre",   NULL, re_ast_print_pcre }
 	};
 
 	assert(name != NULL);
+	assert(print_fsm != NULL);
+	assert(print_ast != NULL);
 
 	for (i = 0; i < sizeof a / sizeof *a; i++) {
 		if (0 == strcmp(a[i].name, name)) {
-			return a[i].format;
+			*print_fsm = a[i].print_fsm;
+			*print_ast = a[i].print_ast;
+			return;
 		}
 	}
 
@@ -216,12 +231,17 @@ xopen(const char *s)
 }
 
 static struct match *
-addmatch(struct match **head, const char *s)
+addmatch(struct match **head, int i, const char *s)
 {
 	struct match *new;
 
 	assert(head != NULL);
 	assert(s != NULL);
+
+	if ((1U << i) > INT_MAX) {
+		fprintf(stderr, "Too many patterns for int bitmap\n");
+		exit(EXIT_FAILURE);
+	}
 
 	/* TODO: explain we find duplicate; return success */
 	/*
@@ -243,6 +263,7 @@ addmatch(struct match **head, const char *s)
 		return NULL;
 	}
 
+	new->i = i;
 	new->s = s;
 
 	new->next = *head;
@@ -287,7 +308,7 @@ carryopaque(const struct fsm_state **set, size_t n,
 		assert(fsm_getopaque(fsm, set[i]) != NULL);
 
 		for (m = fsm_getopaque(fsm, set[i]); m != NULL; m = m->next) {
-			if (!addmatch(&matches, m->s)) {
+			if (!addmatch(&matches, m->i, m->s)) {
 				perror("addmatch");
 				goto error;
 			}
@@ -328,17 +349,95 @@ printexample(FILE *f, const struct fsm *fsm, const struct fsm_state *state)
 		n >= (int) sizeof buf - 1 ? "..." : "");
 }
 
+static int
+endleaf_c(FILE *f, const void *state_opaque, const void *endleaf_opaque)
+{
+	const struct match *m;
+	int n;
+
+	assert(state_opaque != NULL);
+	assert(endleaf_opaque == NULL);
+
+	(void) f;
+	(void) endleaf_opaque;
+
+	n = 0;
+
+	for (m = state_opaque; m != NULL; m = m->next) {
+		n |= 1 << m->i;
+	}
+
+	fprintf(f, "return %#x;", (unsigned) n);
+
+	fprintf(f, " /* ");
+
+	for (m = state_opaque; m != NULL; m = m->next) {
+		fprintf(f, "\"%s\"", m->s); /* XXX: escape string (and comment) */
+
+		if (m->next != NULL) {
+			fprintf(f, ", ");
+		}
+	}
+
+	fprintf(f, " */");
+
+	return 0;
+}
+
+static int
+endleaf_dot(FILE *f, const void *state_opaque, const void *endleaf_opaque)
+{
+	const struct match *m;
+
+	assert(f != NULL);
+	assert(state_opaque != NULL);
+	assert(endleaf_opaque == NULL);
+
+	(void) endleaf_opaque;
+
+	fprintf(f, "label = <");
+
+	for (m = state_opaque; m != NULL; m = m->next) {
+		fprintf(f, "#%u", m->i);
+
+		if (m->next != NULL) {
+			fprintf(f, ",");
+		}
+	}
+
+	fprintf(f, ">");
+
+	/* TODO: only if comments */
+	/* TODO: centralise to libfsm/print/dot.c */
+
+#if 0
+	fprintf(f, " # ");
+
+	for (m = state_opaque; m != NULL; m = m->next) {
+		fprintf(f, "\"%s\"", m->s); /* XXX: escape string (and comment) */
+
+		if (m->next != NULL) {
+			fprintf(f, ", ");
+		}
+	}
+
+	fprintf(f, "\n");
+#endif
+
+	return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
 	struct fsm *(*join)(struct fsm *, struct fsm *);
 	int (*query)(const struct fsm *, const struct fsm *);
-	enum fsm_out format;
+	fsm_print *print_fsm;
+	re_ast_print *print_ast;
 	enum re_dialect dialect;
 	struct fsm *fsm;
 	enum re_flags flags;
 	int xfiles, yfiles;
-	int print;
 	int example;
 	int keep_nfa;
 	int patterns;
@@ -351,23 +450,23 @@ main(int argc, char *argv[])
 	opt.comments          = 1;
 	opt.io                = FSM_IO_GETC;
 
-	flags    = 0U;
-	xfiles   = 0;
-	yfiles   = 0;
-	print    = 0;
-	example  = 0;
-	keep_nfa = 0;
-	patterns = 0;
-	ambig    = 0;
-	query    = NULL;
-	join     = fsm_union;
-	format   = FSM_OUT_FSM;
-	dialect  = RE_NATIVE;
+	flags     = 0U;
+	xfiles    = 0;
+	yfiles    = 0;
+	example   = 0;
+	keep_nfa  = 0;
+	patterns  = 0;
+	ambig     = 0;
+	print_fsm = NULL;
+	print_ast = NULL;
+	query     = NULL;
+	join      = fsm_union;
+	dialect   = RE_NATIVE;
 
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:" "i" "sq:r:l:" "upmnxyz"), c != -1) {
+		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:" "upmnxyz"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 0;          break;
 			case 'c': opt.consolidate_edges = 0;          break;
@@ -376,18 +475,22 @@ main(int argc, char *argv[])
 			case 'e': opt.prefix            = optarg;     break;
 			case 'k': opt.io                = io(optarg); break;
 
-			case 'i': flags |= RE_ICASE; break;
+			case 'b': flags |= RE_ANCHORED; break;
+			case 'i': flags |= RE_ICASE;    break;
 
 			case 's':
 				join = fsm_concat;
 				break;
 
-			case 'q': query   = comparison(optarg);       break;
-			case 'r': dialect = dialect_name(optarg);     break;
-			case 'l': format  = language(optarg);         break;
+			case 'l':
+				print_name(optarg, &print_fsm, &print_ast);
+				break;
+
+			case 'p': print_fsm = fsm_print_fsm;        break;
+			case 'q': query     = comparison(optarg);   break;
+			case 'r': dialect   = dialect_name(optarg); break;
 
 			case 'u': ambig    = 1; break;
-			case 'p': print    = 1; break;
 			case 'x': xfiles   = 1; break;
 			case 'y': yfiles   = 1; break;
 			case 'm': example  = 1; break;
@@ -414,7 +517,12 @@ main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	if (print + example + !!query && xfiles) {
+	if (!!print_fsm + !!print_ast + example + !!query > 1) {
+		fprintf(stderr, "-m, -p and -q are mutually exclusive\n");
+		return EXIT_FAILURE;
+	}
+
+	if (!!print_fsm + !!print_ast + example + !!query && xfiles) {
 		fprintf(stderr, "-x applies only when executing\n");
 		return EXIT_FAILURE;
 	}
@@ -429,12 +537,55 @@ main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	if (!print) {
+	if (print_fsm == NULL) {
 		keep_nfa = 0;
 	}
 
 	if (keep_nfa) {
 		ambig = 1;
+	}
+
+	/* XXX: repetitive */
+	if (print_ast != NULL) {
+		struct ast_re *ast;
+		struct re_err err;
+
+		if (argc != 1) {
+			fprintf(stderr, "single regexp only for this output format\n");
+			return EXIT_FAILURE;
+		}
+
+		if (yfiles) {
+			FILE *f;
+
+			f = xopen(argv[0]);
+
+			ast = re_parse(dialect, fsm_fgetc, f, &opt, flags, &err);
+
+			fclose(f);
+		} else {
+			const char *s;
+
+			s = argv[0];
+
+			ast = re_parse(dialect, fsm_sgetc, &s, &opt, flags, &err);
+		}
+
+		if (ast == NULL) {
+			re_perror(dialect, &err,
+				 yfiles ? argv[0] : NULL,
+				!yfiles ? argv[0] : NULL);
+
+			if (err.e == RE_EXUNSUPPORTD) {
+				return 2;
+			}
+
+			return EXIT_FAILURE;
+		}
+
+		print_ast(stdout, &opt, ast);
+
+		return 0;
 	}
 
 	flags |= RE_MULTI;
@@ -448,7 +599,7 @@ main(int argc, char *argv[])
 	{
 		int i;
 
-		for (i = 0; i < argc - !(print || example || !!query || argc <= 1); i++) {
+		for (i = 0; i < argc - !(print_fsm || example || !!query || argc <= 1); i++) {
 			struct re_err err;
 			struct fsm *new, *q;
 
@@ -466,7 +617,7 @@ main(int argc, char *argv[])
 
 				f = xopen(argv[i]);
 
-				new = re_comp(dialect, re_fgetc, f, &opt, flags, &err);
+				new = re_comp(dialect, fsm_fgetc, f, &opt, flags, &err);
 
 				fclose(f);
 			} else {
@@ -474,13 +625,18 @@ main(int argc, char *argv[])
 
 				s = argv[i];
 
-				new = re_comp(dialect, re_sgetc, &s, &opt, flags, &err);
+				new = re_comp(dialect, fsm_sgetc, &s, &opt, flags, &err);
 			}
 
 			if (new == NULL) {
 				re_perror(dialect, &err,
 					 yfiles ? argv[i] : NULL,
 					!yfiles ? argv[i] : NULL);
+
+				if (err.e == RE_EXUNSUPPORTD) {
+					return 2;
+				}
+
 				return EXIT_FAILURE;
 			}
 
@@ -491,7 +647,6 @@ main(int argc, char *argv[])
 				}
 			}
 
-			/* TODO: associate argv[i] with new's end state */
 			{
 				struct fsm_state *s;
 
@@ -507,7 +662,7 @@ main(int argc, char *argv[])
 
 						matches = NULL;
 
-						if (!addmatch(&matches, argv[i])) {
+						if (!addmatch(&matches, i, argv[i])) {
 							perror("addmatch");
 							return EXIT_FAILURE;
 						}
@@ -560,7 +715,7 @@ main(int argc, char *argv[])
 		return EXIT_SUCCESS;
 	}
 
-	if ((print || example) && argc > 0) {
+	if ((print_fsm || example) && argc > 0) {
 		fprintf(stderr, "too many arguments\n");
 		return EXIT_FAILURE;
 	}
@@ -626,25 +781,25 @@ main(int argc, char *argv[])
 	}
 
 	if (!keep_nfa) {
+		opt.carryopaque = carryopaque;
+
 		/*
 		 * Minimise only when we don't need to keep the end state information
 		 * separated per regexp. Otherwise, convert to a DFA.
 		 */
-		if (!patterns && !example) {
+		if (!patterns && !example && print_fsm != fsm_print_c) {
 			if (!fsm_minimise(fsm)) {
 				perror("fsm_minimise");
 				return EXIT_FAILURE;
 			}
 		} else {
-			opt.carryopaque = carryopaque;
-
 			if (!fsm_determinise(fsm)) {
 				perror("fsm_determinise");
 				return EXIT_FAILURE;
 			}
-
-			opt.carryopaque = NULL;
 		}
+
+		opt.carryopaque = NULL;
 	}
 
 	if (example) {
@@ -681,11 +836,17 @@ main(int argc, char *argv[])
 		return 0;
 	}
 
-	if (print) {
+	if (print_fsm != NULL) {
 		/* TODO: print examples in comments for end states;
 		 * patterns in comments for the whole FSM */
 
-		fsm_print(fsm, stdout, format);
+		if (print_fsm == fsm_print_c) {
+			opt.endleaf = endleaf_c;
+		} else if (print_fsm == fsm_print_dot) {
+			opt.endleaf = patterns ? endleaf_dot : NULL;
+		}
+
+		print_fsm(stdout, fsm);
 
 /* XXX: free fsm */
 

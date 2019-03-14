@@ -6,15 +6,13 @@
 
 #include <assert.h>
 #include <stddef.h>
-#include <limits.h>
-#include <errno.h>
-
-#include <adt/set.h>
 
 #include <fsm/fsm.h>
 #include <fsm/bool.h>
+#include <fsm/pred.h>
+#include <fsm/walk.h>
 
-#include "internal.h"
+#include "walk2.h"
 
 struct fsm *
 fsm_subtract(struct fsm *a, struct fsm *b)
@@ -24,23 +22,30 @@ fsm_subtract(struct fsm *a, struct fsm *b)
 	assert(a != NULL);
 	assert(b != NULL);
 
-	if (a->opt != b->opt) {
-		errno = EINVAL;
-		return NULL;
+	if (!fsm_all(a, fsm_isdfa)) {
+		if (!fsm_determinise(a)) {
+			return NULL;
+		}
+	}
+
+	if (!fsm_all(b, fsm_isdfa)) {
+		if (!fsm_determinise(b)) {
+			return NULL;
+		}
 	}
 
 	/*
-	 * a - b is implemented as: a & ~b
+	 * Notice that the edge constraint for subtraction is different from the
+	 * end state constraint. With subtraction, we want to follow edges
+	 * that are either _ONLYA or _BOTH, but valid end states must be _ONLYA.
 	 */
-
-	if (!fsm_complement(b)) {
-		return NULL;
-	}
-
-	q = fsm_intersect(a, b);
+	q = fsm_walk2(a, b, FSM_WALK2_ONLYA | FSM_WALK2_BOTH, FSM_WALK2_ONLYA);
 	if (q == NULL) {
 		return NULL;
 	}
+
+	fsm_free(a);
+	fsm_free(b);
 
 	return q;
 }

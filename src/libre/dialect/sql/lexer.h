@@ -4,14 +4,12 @@
 #define LX_H
 
 enum lx_sql_token {
+	TOK_SEP,
+	TOK_COUNT,
+	TOK_CLOSECOUNT,
+	TOK_OPENCOUNT,
 	TOK_CHAR,
-	TOK_CLASS_SPACE,
-	TOK_CLASS_UPPER,
-	TOK_CLASS_SPCHR,
-	TOK_CLASS_LOWER,
-	TOK_CLASS_DIGIT,
-	TOK_CLASS_ALPHA,
-	TOK_CLASS_ALNUM,
+	TOK_NAMED__CHAR__CLASS,
 	TOK_RANGE,
 	TOK_INVERT,
 	TOK_CLOSEGROUP,
@@ -41,18 +39,17 @@ struct lx_pos {
 
 struct lx_sql_lx {
 	int (*lgetc)(struct lx_sql_lx *lx);
-	void *opaque;
+	void *getc_opaque;
 
 	int c; /* lx_sql_ungetc buffer */
 
 	struct lx_pos start;
 	struct lx_pos end;
 
-	void *buf;
-	int  (*push) (struct lx_sql_lx *lx, char c);
-	void (*pop)  (struct lx_sql_lx *lx);
-	int  (*clear)(struct lx_sql_lx *lx);
-	void (*free) (struct lx_sql_lx *lx);
+	void *buf_opaque;
+	int  (*push) (void *buf_opaque, char c);
+	int  (*clear)(void *buf_opaque);
+	void (*free) (void *buf_opaque);
 
 	enum lx_sql_token (*z)(struct lx_sql_lx *lx);
 };
@@ -99,10 +96,9 @@ const char *lx_sql_example(enum lx_sql_token (*z)(struct lx_sql_lx *), enum lx_s
 void lx_sql_init(struct lx_sql_lx *lx);
 enum lx_sql_token lx_sql_next(struct lx_sql_lx *lx);
 
-int  lx_sql_dynpush(struct lx_sql_lx *lx, char c);
-void lx_sql_dynpop(struct lx_sql_lx *lx);
-int  lx_sql_dynclear(struct lx_sql_lx *lx);
-void lx_sql_dynfree(struct lx_sql_lx *lx);
+int  lx_sql_dynpush(void *buf_opaque, char c);
+int  lx_sql_dynclear(void *buf_opaque);
+void lx_sql_dynfree(void *buf_opaque);
 
 #endif
 

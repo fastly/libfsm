@@ -20,12 +20,14 @@
 	<!ENTITY query.lit     "<literal>query</literal>">
 -->
 	<!ENTITY io.arg "<replaceable>io</replaceable>">
+	<!ENTITY iterations.arg "<replaceable>iterations</replaceable>">
 
 	<!ENTITY a.opt "<option>-a</option>">
 	<!ENTITY w.opt "<option>-w</option>">
 	<!ENTITY c.opt "<option>-c</option>">
 	<!ENTITY e.opt "<option>-e</option>&nbsp;&prefix.arg;">
 	<!ENTITY k.opt "<option>-k</option>&nbsp;&io.arg;">
+	<!ENTITY i.opt "<option>-i</option>&nbsp;&iterations.arg;">
 	<!ENTITY X.opt "<option>-X</option>">
 
 	<!ENTITY d.opt "<option>-d</option>">
@@ -42,9 +44,9 @@
 	<!ENTITY v.opt "<option>-v</option>">
 
 	<!ENTITY c.lit    "<literal>c</literal>">
-	<!ENTITY csv.lit  "<literal>csv</literal>">
 	<!ENTITY dot.lit  "<literal>dot</literal>">
 	<!ENTITY fsm.lit  "<literal>fsm</literal>">
+	<!ENTITY ir.lit   "<literal>ir</literal>">
 	<!ENTITY json.lit "<literal>json</literal>">
 ]>
 
@@ -96,6 +98,7 @@
 				<arg choice="plain">&t.opt;</arg>
 			</group>
 
+			<arg choice="opt">&i.opt;</arg>
 		</cmdsynopsis>
 
 		<cmdsynopsis>
@@ -209,6 +212,17 @@
 				<listitem>
 				</listitem>
 -->
+			</varlistentry>
+
+			<varlistentry>
+				<term>&i.opt;</term>
+
+				<listitem>
+					<para>Iterate a given number of times when applying a
+						transformation per <option>-t</option>.
+						The time taken for each iteration is printed to &stdout.lit;.
+						Times are given in milliseconds.</para>
+				</listitem>
 			</varlistentry>
 
 			<varlistentry>
@@ -388,6 +402,12 @@
 							</tr>
 -->
 							<!-- TODO: also final, hasfinal -->
+							<tr>
+								<td><code>count</code></td>
+								<td rowspan="1">&fsm_countstates.3;</td>
+								<td rowspan="1">Count of the number of states in the &fsm;.
+									Printed to &stdout.lit;; exit status is always true.</td>
+							</tr>
 						</tbody>
 					</table>
 				</listitem>

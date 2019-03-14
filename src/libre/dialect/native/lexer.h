@@ -9,20 +9,7 @@ enum lx_native_token {
 	TOK_CLOSECOUNT,
 	TOK_OPENCOUNT,
 	TOK_CHAR,
-	TOK_CLASS_XDIGIT,
-	TOK_CLASS_WORD,
-	TOK_CLASS_UPPER,
-	TOK_CLASS_SPACE,
-	TOK_CLASS_PUNCT,
-	TOK_CLASS_PRINT,
-	TOK_CLASS_LOWER,
-	TOK_CLASS_GRAPH,
-	TOK_CLASS_DIGIT,
-	TOK_CLASS_CNTRL,
-	TOK_CLASS_BLANK,
-	TOK_CLASS_ASCII,
-	TOK_CLASS_ALPHA,
-	TOK_CLASS_ALNUM,
+	TOK_NAMED__CHAR__CLASS,
 	TOK_RANGE,
 	TOK_INVERT,
 	TOK_CLOSEGROUP,
@@ -46,28 +33,28 @@ enum lx_native_token {
 
 /*
  * .byte is 0-based.
- * .line and .col are 1-based; 0 means unknown.
+ * .line, .col, and .saved_col are 1-based; 0 means unknown.
  */
 struct lx_pos {
 	unsigned byte;
 	unsigned line;
 	unsigned col;
+	unsigned saved_col;
 };
 
 struct lx_native_lx {
 	int (*lgetc)(struct lx_native_lx *lx);
-	void *opaque;
+	void *getc_opaque;
 
 	int c; /* lx_native_ungetc buffer */
 
 	struct lx_pos start;
 	struct lx_pos end;
 
-	void *buf;
-	int  (*push) (struct lx_native_lx *lx, char c);
-	void (*pop)  (struct lx_native_lx *lx);
-	int  (*clear)(struct lx_native_lx *lx);
-	void (*free) (struct lx_native_lx *lx);
+	void *buf_opaque;
+	int  (*push) (void *buf_opaque, char c);
+	int  (*clear)(void *buf_opaque);
+	void (*free) (void *buf_opaque);
 
 	enum lx_native_token (*z)(struct lx_native_lx *lx);
 };
@@ -114,10 +101,9 @@ const char *lx_native_example(enum lx_native_token (*z)(struct lx_native_lx *), 
 void lx_native_init(struct lx_native_lx *lx);
 enum lx_native_token lx_native_next(struct lx_native_lx *lx);
 
-int  lx_native_dynpush(struct lx_native_lx *lx, char c);
-void lx_native_dynpop(struct lx_native_lx *lx);
-int  lx_native_dynclear(struct lx_native_lx *lx);
-void lx_native_dynfree(struct lx_native_lx *lx);
+int  lx_native_dynpush(void *buf_opaque, char c);
+int  lx_native_dynclear(void *buf_opaque);
+void lx_native_dynfree(void *buf_opaque);
 
 #endif
 

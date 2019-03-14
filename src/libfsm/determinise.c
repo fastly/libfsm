@@ -13,7 +13,6 @@
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
 #include <fsm/walk.h>
-#include <fsm/out.h>
 #include <fsm/options.h>
 
 #include "internal.h"
@@ -54,27 +53,27 @@ struct fsm_determinise_cache {
 };
 
 static void
-clear_trans(struct set *trans)
+clear_trans(const struct fsm *fsm, struct set *trans)
 {
 	struct set_iter it;
 	struct trans *t;
 
 	for (t = set_first(trans, &it); t != NULL; t = set_next(&it)) {
-		free(t);
+		f_free(fsm, t);
 	}
 
 	set_clear(trans);
 }
 
 static void
-clear_mappings(struct set *mappings)
+clear_mappings(const struct fsm *fsm, struct set *mappings)
 {
 	struct set_iter it;
 	struct mapping *m;
 
 	for (m = set_first(mappings, &it); m != NULL; m = set_next(&it)) {
 		set_free(m->closure);
-		free(m);
+		f_free(fsm, m);
 	}
 
 	set_clear(mappings);
@@ -128,7 +127,7 @@ addtomappings(struct set *mappings, struct fsm *dfa, struct set *closure)
 	}
 
 	/* else add new DFA state */
-	m = malloc(sizeof *m);
+	m = f_malloc(dfa, sizeof *m);
 	if (m == NULL) {
 		return NULL;
 	}
@@ -137,14 +136,14 @@ addtomappings(struct set *mappings, struct fsm *dfa, struct set *closure)
 	m->closure  = closure;
 	m->dfastate = fsm_addstate(dfa);
 	if (m->dfastate == NULL) {
-		free(m);
+		f_free(dfa, m);
 		return NULL;
 	}
 
 	m->done = 0;
 
 	if (!set_add(&mappings, m)) {
-		free(m);
+		f_free(dfa, m);
 		return NULL;
 	}
 
@@ -203,7 +202,8 @@ epsilon_closure(const struct fsm_state *state, struct set **closure)
  * Create the DFA state if neccessary.
  */
 static struct fsm_state *
-state_closure(struct set *mappings, struct fsm *dfa, const struct fsm_state *nfastate)
+state_closure(struct set *mappings, struct fsm *dfa, const struct fsm_state *nfastate,
+	int includeself)
 {
 	struct mapping *m;
 	struct set *ec;
@@ -216,6 +216,15 @@ state_closure(struct set *mappings, struct fsm *dfa, const struct fsm_state *nfa
 	if (epsilon_closure(nfastate, &ec) == NULL) {
 		set_free(ec);
 		return NULL;
+	}
+
+	if (!includeself) {
+		set_remove(&ec, (void *) nfastate);
+
+		if (set_count(ec) == 0) {
+			set_free(ec);
+			ec = NULL;
+		}
 	}
 
 	if (ec == NULL) {
@@ -284,7 +293,7 @@ nextnotdone(struct set *mappings)
  * TODO: maybe simpler to just return the set, rather than take a double pointer
  */
 static int
-listnonepsilonstates(struct set *trans, struct set *set)
+listnonepsilonstates(const struct fsm *fsm ,struct set *trans, struct set *set)
 {
 	struct fsm_state *s;
 	struct set_iter it;
@@ -315,9 +324,9 @@ listnonepsilonstates(struct set *trans, struct set *set)
 					continue;
 				}
 
-				p = malloc(sizeof *p);
+				p = f_malloc(fsm, sizeof *p);
 				if (p == NULL) {
-					clear_trans(trans);
+					clear_trans(fsm ,trans);
 					return 0;
 				}
 
@@ -325,8 +334,8 @@ listnonepsilonstates(struct set *trans, struct set *set)
 				p->state = st;
 
 				if (!set_add(&trans, p)) {
-					free(p);
-					clear_trans(trans);
+					f_free(fsm, p);
+					clear_trans(fsm, trans);
 					return 0;
 				}
 			}
@@ -423,6 +432,16 @@ determinise(struct fsm *nfa,
 	dfa->nfa = nfa;
 #endif
 
+	if (nfa->endcount == 0) {
+		dfa->start = fsm_addstate(dfa);
+		if (dfa->start == NULL) {
+			fsm_free(dfa);
+			return NULL;
+		}
+
+		return dfa;
+	}
+
 	if (dcache->mappings == NULL) {
 		dcache->mappings = set_create(cmp_mapping);
 	}
@@ -440,9 +459,34 @@ determinise(struct fsm *nfa,
 	 * This is not yet "done"; it starts off the loop below.
 	 */
 	{
+		const struct fsm_state *nfastart;
 		struct fsm_state *dfastart;
+		int includeself = 1;
 
-		dfastart = state_closure(mappings, dfa, fsm_getstart(nfa));
+		nfastart = fsm_getstart(nfa);
+
+		/*
+		 * As a special case for Brzozowski's algorithm, fsm_determinise() is
+		 * expected to produce a minimal DFA for its invocation after the second
+		 * reversal. Since we do not provide multiple start states, fsm_reverse()
+		 * may introduce a new start state which transitions to several states.
+		 * This is the situation we detect here.
+		 *
+		 * This fabricated start state is then excluded from its epsilon closure,
+		 * so that the closures for its destination states are found equivalent,
+		 * because they also do not include the start state.
+		 *
+		 * If you pass an equivalent NFA where this is not the case (for example,
+		 * with the start state containing an epsilon edge to itself), we regard
+		 * this as any other DFA, and minimal output is not guaranteed.
+		 */
+		if (!fsm_isend(nfa, nfastart)
+			&& fsm_epsilonsonly(nfa, nfastart) && !fsm_hasincoming(nfa, nfastart))
+		{
+			includeself = 0;
+		}
+
+		dfastart = state_closure(mappings, dfa, nfastart, includeself);
 		if (dfastart == NULL) {
 			/* TODO: error */
 			goto error;
@@ -467,7 +511,7 @@ determinise(struct fsm *nfa,
 		 * next states in the NFA.
 		 */
 		/* TODO: document that nes contains only entries with labels set */
-		if (!listnonepsilonstates(trans, curr->closure)) {
+		if (!listnonepsilonstates(dfa, trans, curr->closure)) {
 			goto error;
 		}
 
@@ -493,25 +537,25 @@ determinise(struct fsm *nfa,
 			new = set_closure(mappings, dfa, reachable);
 			set_free(reachable);
 			if (new == NULL) {
-				clear_trans(trans);
+				clear_trans(dfa, trans);
 				goto error;
 			}
 
 			e = fsm_addedge_literal(dfa, curr->dfastate, new, t->c);
 			if (e == NULL) {
-				clear_trans(trans);
+				clear_trans(dfa, trans);
 				goto error;
 			}
 		}
 
-		clear_trans(trans);
+		clear_trans(dfa, trans);
 
 #ifdef DEBUG_TODFA
 		{
 			struct set *q;
 
 			for (q = set_first(curr->closure, &jt); q != NULL; q = set_next(&jt)) {
-				if (!set_add(&curr->dfastate->nfasl, q->state)) {
+				if (!set_add(&curr->dfastate->nfasl, q)) {
 					goto error;
 				}
 			}
@@ -531,7 +575,7 @@ determinise(struct fsm *nfa,
 		fsm_carryopaque(dfa, curr->closure, dfa, curr->dfastate);
 	}
 
-	clear_mappings(mappings);
+	clear_mappings(dfa, mappings);
 
 	/* TODO: can assert a whole bunch of things about the dfa, here */
 	assert(fsm_all(dfa, fsm_isdfa));
@@ -540,7 +584,7 @@ determinise(struct fsm *nfa,
 
 error:
 
-	clear_mappings(mappings);
+	clear_mappings(dfa, mappings);
 	fsm_free(dfa);
 
 	return NULL;
@@ -557,7 +601,7 @@ fsm_determinise_cache(struct fsm *fsm,
 	assert(dcache != NULL);
 
 	if (*dcache == NULL) {
-		*dcache = malloc(sizeof **dcache);
+		*dcache = f_malloc(fsm, sizeof **dcache);
 		if (*dcache == NULL) {
 			return 0;
 		}
@@ -577,7 +621,6 @@ fsm_determinise_cache(struct fsm *fsm,
 		return 0;
 	}
 
-	assert(fsm->nfa == NULL);
 	assert(dfa->nfa == fsm);
 
 	fsm->nfa->sl    = fsm->sl;
@@ -604,8 +647,8 @@ fsm_determinise_freecache(struct fsm *fsm, struct fsm_determinise_cache *dcache)
 		return;
 	}
 
-	clear_mappings(dcache->mappings);
-	clear_trans(dcache->trans);
+	clear_mappings(fsm, dcache->mappings);
+	clear_trans(fsm, dcache->trans);
 
 	if (dcache->mappings != NULL) {
 		set_free(dcache->mappings);
@@ -615,7 +658,7 @@ fsm_determinise_freecache(struct fsm *fsm, struct fsm_determinise_cache *dcache)
 		set_free(dcache->trans);
 	}
 
-	free(dcache);
+	f_free(fsm, dcache);
 }
 
 int

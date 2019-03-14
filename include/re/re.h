@@ -33,7 +33,9 @@ enum re_flags {
 	RE_MULTI   = 1 << 2,
 	RE_REVERSE = 1 << 3,
 	RE_SINGLE  = 1 << 4,
-	RE_ZONE    = 1 << 5
+	RE_ZONE    = 1 << 5,
+	RE_ANCHORED = 1 << 6,
+	RE_FLAGS_NONE = 0
 };
 
 #define RE_ANCHOR (RE_TEXT | RE_MULTI | RE_ZONE)
@@ -64,6 +66,7 @@ enum re_errno {
 	RE_EOVERLAP     =  0 | RE_MARK | RE_GROUP,
 	RE_ENEGRANGE    =  1 | RE_MARK | RE_GROUP,
 	RE_ENEGCOUNT    =  2 | RE_MARK | RE_GROUP,
+	RE_EDISTINCT    =  3 | RE_MARK | RE_GROUP,
 
 	RE_EHEXRANGE    =  0 | RE_MARK | RE_ESC,
 	RE_EOCTRANGE    =  1 | RE_MARK | RE_ESC,
@@ -82,7 +85,8 @@ enum re_errno {
 	RE_EXEOF        = 10 | RE_MARK,
 	RE_EXESC        = 11 | RE_MARK,
 	RE_EFLAG        = 12 | RE_MARK,
-	RE_EXCLOSEFLAGS = 13 | RE_MARK
+	RE_EXCLOSEFLAGS = 13 | RE_MARK,
+	RE_EXUNSUPPORTD = 14 | RE_MARK
 };
 
 struct re_pos {
@@ -112,15 +116,34 @@ struct re_err {
 int
 re_flags(const char *s, enum re_flags *f);
 
+/* Callback to acquire each character of the input, in the spirit of fgetc().
+ * opaque can be used to pass in callback-specific state, and is otherwise
+ * opaque to libre. */
+typedef int
+re_getchar_fun(void *opaque);
+
 /*
- * Compile a regexp of the given dialect. The function passed acts as a callback
- * to acquire each character of the input, in the spirit of fgetc().
+ * Compile a regexp of the given dialect.
  *
  * Returns NULL on error. If non-NULL, the *err struct is populated with the
  * type and 0-indexed byte offset of the error.
+ *
+ * libfsm provides getc callbacks suitable for use with re_comp; see <fsm/fsm.h>.
+ * For example:
+ *
+ *     const char *s = "abc";
+ *     re_comp(RE_NATIVE, fsm_sgetc, &s, 0, NULL);
+ *
+ * and:
+ *
+ *     re_comp(RE_NATIVE, fsm_fgetc, stdin, 0, NULL);
+ *
+ * There's nothing special about libfsm's implementation of these; they could
+ * equally well be user defined.
  */
 struct fsm *
-re_comp(enum re_dialect dialect, int (*f)(void *opaque), void *opaque,
+re_comp(enum re_dialect dialect,
+	re_getchar_fun *f, void *opaque,
 	const struct fsm_options *opt,
 	enum re_flags flags, struct re_err *err);
 
@@ -140,25 +163,6 @@ re_perror(enum re_dialect dialect, const struct re_err *err,
 
 
 /* TODO: a convenience interface in the spirit of strtol() which parses between delimiters (and escapes accordingly) */
-
-
-/*
- * Callbacks which may be passed to re_comp(). These are conveniences for
- * common situations; they could equally well be user-defined.
- *
- *  re_sgetc - To read from a string. Pass the address of a pointer to the
- *              first element of a string:
- *
- *                const char *s = "abc";
- *                re_comp(RE_NATIVE, re_sgetc, &s, 0, NULL);
- *
- *              Where s will be incremented to point to each character in turn.
- *
- *  re_fgetc - To read from a file. Pass a FILE *:
- *                re_comp(RE_NATIVE, re_fgetc, stdin, 0, NULL);
- */
-int re_sgetc(void *opaque); /* expects opaque to be char ** */
-int re_fgetc(void *oapque); /* expects opaque to be FILE *  */
 
 #endif
 

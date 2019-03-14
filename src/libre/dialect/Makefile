@@ -13,6 +13,7 @@ DIR += ${BUILD}/src/libre/dialect/${dialect}
 
 SRC += src/libre/dialect/${dialect}/lexer.c
 SRC += src/libre/dialect/${dialect}/parser.c
+SRC += src/libre/dialect/${dialect}/re_dialect_${dialect}.c
 
 LEXER  += src/libre/dialect/${dialect}/lexer.lx
 PARSER += src/libre/dialect/${dialect}/parser.sid
@@ -39,6 +40,14 @@ DFLAGS.${src} += -I src # XXX: for internal.h
 .for parser in ${PARSER:Msrc/libre/dialect/${dialect}/parser.sid}
 ACT.${parser} = src/libre/parser.act
 .endfor
+
+# Our inlined actions use m < n for counts, but are also called with
+# m for both values, and gcc complains about m < m never being true.
+.if ${CC:T:Mgcc}
+.for src in ${SRC:Msrc/libre/dialect/${dialect}/parser.c}
+CFLAGS.${src} += -Wno-tautological-compare
+.endfor
+.endif
 
 # SID persistent variables are unused in some productions
 .if ${CC:T:Mgcc} || ${CC:T:Mclang}

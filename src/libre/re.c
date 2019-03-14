@@ -17,14 +17,17 @@
 #include "../libfsm/internal.h" /* XXX */
 
 #include "dialect/comp.h"
+#include "print.h"
+
+#include "re_ast.h"
+#include "re_comp.h"
+#include "re_analysis.h"
 
 struct dialect {
 	enum re_dialect dialect;
-	struct fsm *(*comp)(int (*f)(void *opaque), void *opaque,
-		const struct fsm_options *opt,
-		enum re_flags flags, int overlap,
-		struct re_err *err);
+	re_dialect_parse_fun *parse;
 	int overlap;
+	enum re_flags flags; /* ever-present flags which cannot be disabled */
 };
 
 static const struct dialect *
@@ -33,12 +36,12 @@ re_dialect(enum re_dialect dialect)
 	size_t i;
 
 	static const struct dialect a[] = {
-		{ RE_LIKE,    comp_like,    0 },
-		{ RE_LITERAL, comp_literal, 0 },
-		{ RE_GLOB,    comp_glob,    0 },
-		{ RE_NATIVE,  comp_native,  0 },
-		{ RE_PCRE,    comp_pcre,    0 },
-		{ RE_SQL,     comp_sql,     1 }
+		{ RE_LIKE,    parse_re_like,    0, RE_ANCHORED },
+		{ RE_LITERAL, parse_re_literal, 0, RE_ANCHORED },
+		{ RE_GLOB,    parse_re_glob,    0, RE_ANCHORED },
+		{ RE_NATIVE,  parse_re_native,  0, 0           },
+		{ RE_PCRE,    parse_re_pcre,    0, 0           },
+		{ RE_SQL,     parse_re_sql,     1, RE_ANCHORED }
 	};
 
 	for (i = 0; i < sizeof a / sizeof *a; i++) {
@@ -69,12 +72,13 @@ re_flags(const char *s, enum re_flags *f)
 		}
 
 		switch (*p) {
-		case 'i': *f |= RE_ICASE;   break;
-		case 'g': *f |= RE_TEXT;    break;
-		case 'm': *f |= RE_MULTI;   break;
-		case 'r': *f |= RE_REVERSE; break;
-		case 's': *f |= RE_SINGLE;  break;
-		case 'z': *f |= RE_ZONE;    break;
+		case 'a': *f |= RE_ANCHORED; break; /* PCRE's /x/A flag means /^x/ only */
+		case 'i': *f |= RE_ICASE;    break;
+		case 'g': *f |= RE_TEXT;     break;
+		case 'm': *f |= RE_MULTI;    break;
+		case 'r': *f |= RE_REVERSE;  break;
+		case 's': *f |= RE_SINGLE;   break;
+		case 'z': *f |= RE_ZONE;     break;
 
 		default:
 			errno = EINVAL;
@@ -85,29 +89,89 @@ re_flags(const char *s, enum re_flags *f)
 	return 0;
 }
 
+struct ast_re *
+re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
+	const struct fsm_options *opt,
+	enum re_flags flags, struct re_err *err)
+{
+	const struct dialect *m;
+	struct ast_re *ast = NULL;
+	enum re_analysis_res res;
+	
+	assert(getc != NULL);
+
+	m = re_dialect(dialect);
+	if (m == NULL) {
+		if (err != NULL) { err->e = RE_EBADDIALECT; }
+		return NULL;
+	}
+
+	flags |= m->flags;
+
+	ast = m->parse(getc, opaque, opt, flags, m->overlap, err);
+	if (ast == NULL) {
+		return NULL;
+	}
+
+	/* Do a complete pass over the AST, filling in other details. */
+	res = re_ast_analysis(ast);
+
+	if (res < 0) {
+		re_ast_free(ast);
+		if (err != NULL) { err->e = RE_EERRNO; }
+		return NULL;
+	}
+
+	ast->unsatisfiable = (res == RE_ANALYSIS_UNSATISFIABLE);
+
+	return ast;
+}
+
 struct fsm *
 re_comp(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 	const struct fsm_options *opt,
 	enum re_flags flags, struct re_err *err)
 {
-	const struct dialect *m;
+	struct ast_re *ast;
 	struct fsm *new;
-
-	assert(getc != NULL);
+	const struct dialect *m;
 
 	m = re_dialect(dialect);
+
 	if (m == NULL) {
-		if (err != NULL) {
-			err->e = RE_EBADDIALECT;
+		if (err != NULL) { err->e = RE_EBADDIALECT; }
+		return NULL;
+	}
+
+	flags |= m->flags;
+
+	ast = re_parse(dialect, getc, opaque, opt, flags, err);
+	if (ast == NULL) { return NULL; }
+
+	/* If the RE is inherently unsatisfiable, then free the
+	 * AST and replace it with an empty tombstone node.
+	 * This will compile to an FSM that matches nothing, so
+	 * that unioning it with other regexes will still work. */
+	if (ast->unsatisfiable) {
+		struct ast_expr *unsat = ast->expr;
+		ast->expr = re_ast_expr_tombstone();
+		re_ast_expr_free(unsat);
+	}
+
+	new = re_comp_ast(ast, flags, opt);
+	re_ast_free(ast);
+	ast = NULL;
+
+	if (new == NULL) {
+		fprintf(stderr, "Compilation failed\n");
+		if (err->e == RE_ESUCCESS) {
+			/* If we got here, we had a parse error
+			 * without error information set. */
+			assert(0);
 		}
 		return NULL;
 	}
-
-	new = m->comp(getc, opaque, opt, flags, m->overlap, err);
-	if (new == NULL) {
-		return NULL;
-	}
-
+	
 	/*
 	 * All flags operators commute with respect to composition.
 	 * That is, the order of application here does not matter;
@@ -115,17 +179,15 @@ re_comp(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 	 */
 
 	if (flags & RE_REVERSE) {
-		if (!fsm_reverse(new)) {
-			goto error;
-		}
+		if (!fsm_reverse(new)) { goto error; }
 	}
 
 	return new;
 
 error:
 
-	fsm_free(new);
-
+	if (new != NULL) { fsm_free(new); }
+	if (ast != NULL) { re_ast_free(ast); }
 	if (err != NULL) {
 		err->e = RE_EERRNO;
 	}

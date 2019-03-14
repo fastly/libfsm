@@ -52,9 +52,6 @@ lx_like_ungetc(struct lx_like_lx *lx, int c)
 
 	lx->c = c;
 
-	if (lx->pop != NULL) {
-		lx->pop(lx);
-	}
 
 	lx->end.byte--;
 	lx->end.col--;
@@ -66,13 +63,9 @@ lx_like_ungetc(struct lx_like_lx *lx, int c)
 }
 
 int
-lx_like_dynpush(struct lx_like_lx *lx, char c)
+lx_like_dynpush(void *buf_opaque, char c)
 {
-	struct lx_dynbuf *t;
-
-	assert(lx != NULL);
-
-	t = lx->buf;
+	struct lx_dynbuf *t = buf_opaque;
 
 	assert(t != NULL);
 
@@ -111,34 +104,10 @@ lx_like_dynpush(struct lx_like_lx *lx, char c)
 	return 0;
 }
 
-void
-lx_like_dynpop(struct lx_like_lx *lx)
-{
-	struct lx_dynbuf *t;
-
-	assert(lx != NULL);
-
-	t = lx->buf;
-
-	assert(t != NULL);
-	assert(t->a != NULL);
-	assert(t->p >= t->a);
-
-	if (t->p == t->a) {
-		return;
-	}
-
-	t->p--;
-}
-
 int
-lx_like_dynclear(struct lx_like_lx *lx)
+lx_like_dynclear(void *buf_opaque)
 {
-	struct lx_dynbuf *t;
-
-	assert(lx != NULL);
-
-	t = lx->buf;
+	struct lx_dynbuf *t = buf_opaque;
 
 	assert(t != NULL);
 
@@ -163,13 +132,9 @@ lx_like_dynclear(struct lx_like_lx *lx)
 }
 
 void
-lx_like_dynfree(struct lx_like_lx *lx)
+lx_like_dynfree(void *buf_opaque)
 {
-	struct lx_dynbuf *t;
-
-	assert(lx != NULL);
-
-	t = lx->buf;
+	struct lx_dynbuf *t = buf_opaque;
 
 	assert(t != NULL);
 
@@ -181,13 +146,13 @@ z0(struct lx_like_lx *lx)
 	int c;
 
 	enum {
-		NONE, S0, S1, S2, S3
+		S0, S1, S2, S3, NONE
 	} state;
 
 	assert(lx != NULL);
 
 	if (lx->clear != NULL) {
-		lx->clear(lx);
+		lx->clear(lx->buf_opaque);
 	}
 
 	state = NONE;
@@ -199,273 +164,14 @@ z0(struct lx_like_lx *lx)
 			state = S0;
 		}
 
-		if (lx->push != NULL) {
-			if (-1 == lx->push(lx, c)) {
-				return TOK_ERROR;
-			}
-		}
-
 		switch (state) {
 		case S0: /* start */
 			switch ((unsigned char) c) {
-			case '\x00':
-			case '\x01':
-			case '\x02':
-			case '\x03':
-			case '\x04':
-			case '\x05':
-			case '\x06':
-			case '\a':
-			case '\b':
-			case '\t':
-			case '\n':
-			case '\v':
-			case '\f':
-			case '\r':
-			case '\x0e':
-			case '\x0f':
-			case '\x10':
-			case '\x11':
-			case '\x12':
-			case '\x13':
-			case '\x14':
-			case '\x15':
-			case '\x16':
-			case '\x17':
-			case '\x18':
-			case '\x19':
-			case '\x1a':
-			case '\x1b':
-			case '\x1c':
-			case '\x1d':
-			case '\x1e':
-			case '\x1f':
-			case ' ':
-			case '!':
-			case '"':
-			case '#':
-			case '$': state = S1; continue;
-			case '%': state = S2; continue;
-			case '&':
-			case '\'':
-			case '(':
-			case ')':
-			case '*':
-			case '+':
-			case ',':
-			case '-':
-			case '.':
-			case '\x2f':
-			case '0':
-			case '1':
-			case '2':
-			case '3':
-			case '4':
-			case '5':
-			case '6':
-			case '7':
-			case '8':
-			case '9':
-			case ':':
-			case ';':
-			case '<':
-			case '=':
-			case '>':
-			case '?':
-			case '@':
-			case 'A':
-			case 'B':
-			case 'C':
-			case 'D':
-			case 'E':
-			case 'F':
-			case 'G':
-			case 'H':
-			case 'I':
-			case 'J':
-			case 'K':
-			case 'L':
-			case 'M':
-			case 'N':
-			case 'O':
-			case 'P':
-			case 'Q':
-			case 'R':
-			case 'S':
-			case 'T':
-			case 'U':
-			case 'V':
-			case 'W':
-			case 'X':
-			case 'Y':
-			case 'Z':
-			case '[':
-			case '\\':
-			case ']':
-			case '^': state = S1; continue;
-			case '_': state = S3; continue;
-			case '`':
-			case 'a':
-			case 'b':
-			case 'c':
-			case 'd':
-			case 'e':
-			case 'f':
-			case 'g':
-			case 'h':
-			case 'i':
-			case 'j':
-			case 'k':
-			case 'l':
-			case 'm':
-			case 'n':
-			case 'o':
-			case 'p':
-			case 'q':
-			case 'r':
-			case 's':
-			case 't':
-			case 'u':
-			case 'v':
-			case 'w':
-			case 'x':
-			case 'y':
-			case 'z':
-			case '{':
-			case '|':
-			case '}':
-			case '~':
-			case '\x7f':
-			case 0x80:
-			case 0x81:
-			case 0x82:
-			case 0x83:
-			case 0x84:
-			case 0x85:
-			case 0x86:
-			case 0x87:
-			case 0x88:
-			case 0x89:
-			case 0x8a:
-			case 0x8b:
-			case 0x8c:
-			case 0x8d:
-			case 0x8e:
-			case 0x8f:
-			case 0x90:
-			case 0x91:
-			case 0x92:
-			case 0x93:
-			case 0x94:
-			case 0x95:
-			case 0x96:
-			case 0x97:
-			case 0x98:
-			case 0x99:
-			case 0x9a:
-			case 0x9b:
-			case 0x9c:
-			case 0x9d:
-			case 0x9e:
-			case 0x9f:
-			case 0xa0:
-			case 0xa1:
-			case 0xa2:
-			case 0xa3:
-			case 0xa4:
-			case 0xa5:
-			case 0xa6:
-			case 0xa7:
-			case 0xa8:
-			case 0xa9:
-			case 0xaa:
-			case 0xab:
-			case 0xac:
-			case 0xad:
-			case 0xae:
-			case 0xaf:
-			case 0xb0:
-			case 0xb1:
-			case 0xb2:
-			case 0xb3:
-			case 0xb4:
-			case 0xb5:
-			case 0xb6:
-			case 0xb7:
-			case 0xb8:
-			case 0xb9:
-			case 0xba:
-			case 0xbb:
-			case 0xbc:
-			case 0xbd:
-			case 0xbe:
-			case 0xbf:
-			case 0xc0:
-			case 0xc1:
-			case 0xc2:
-			case 0xc3:
-			case 0xc4:
-			case 0xc5:
-			case 0xc6:
-			case 0xc7:
-			case 0xc8:
-			case 0xc9:
-			case 0xca:
-			case 0xcb:
-			case 0xcc:
-			case 0xcd:
-			case 0xce:
-			case 0xcf:
-			case 0xd0:
-			case 0xd1:
-			case 0xd2:
-			case 0xd3:
-			case 0xd4:
-			case 0xd5:
-			case 0xd6:
-			case 0xd7:
-			case 0xd8:
-			case 0xd9:
-			case 0xda:
-			case 0xdb:
-			case 0xdc:
-			case 0xdd:
-			case 0xde:
-			case 0xdf:
-			case 0xe0:
-			case 0xe1:
-			case 0xe2:
-			case 0xe3:
-			case 0xe4:
-			case 0xe5:
-			case 0xe6:
-			case 0xe7:
-			case 0xe8:
-			case 0xe9:
-			case 0xea:
-			case 0xeb:
-			case 0xec:
-			case 0xed:
-			case 0xee:
-			case 0xef:
-			case 0xf0:
-			case 0xf1:
-			case 0xf2:
-			case 0xf3:
-			case 0xf4:
-			case 0xf5:
-			case 0xf6:
-			case 0xf7:
-			case 0xf8:
-			case 0xf9:
-			case 0xfa:
-			case 0xfb:
-			case 0xfc:
-			case 0xfd:
-			case 0xfe:
-			case 0xff: state = S1; continue;
-			default:  lx->lgetc = NULL; return TOK_UNKNOWN;
+			case '%': state = S2; break;
+			case '_': state = S3; break;
+			default: state = S1; break;
 			}
+			break;
 
 		case S1: /* e.g. "a" */
 			lx_like_ungetc(lx, c); return TOK_CHAR;
@@ -475,6 +181,15 @@ z0(struct lx_like_lx *lx)
 
 		case S3: /* e.g. "_" */
 			lx_like_ungetc(lx, c); return TOK_ANY;
+
+		default:
+			; /* unreached */
+		}
+
+		if (lx->push != NULL) {
+			if (-1 == lx->push(lx->buf_opaque, c)) {
+				return TOK_ERROR;
+			}
 		}
 	}
 
@@ -555,7 +270,7 @@ lx_like_next(struct lx_like_lx *lx)
 	t = lx->z(lx);
 
 	if (lx->push != NULL) {
-		if (-1 == lx->push(lx, '\0')) {
+		if (-1 == lx->push(lx->buf_opaque, '\0')) {
 			return TOK_ERROR;
 		}
 	}
