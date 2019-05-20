@@ -17,10 +17,8 @@
 
 struct fsm;
 struct fsm_state;
-struct fsm_edge;
 struct fsm_determinise_cache;
 struct fsm_options;
-struct set; /* XXX */
 struct path; /* XXX */
 
 /*
@@ -46,28 +44,6 @@ fsm_new(const struct fsm_options *opt);
  */
 void
 fsm_free(struct fsm *fsm);
-
-/*
- * Internal free function that invokes free(3) by default, or a user-provided
- * free function to free memory and perform any custom memory tracking or handling
- */
-void
-f_free(const struct fsm *fsm, void *p);
-
-/*
- * Internal malloc function that invokes malloc(3) by default, or a user-provided
- * malloc function to allocate memory and perform any custom memory tracking or handling
- */
-void *
-f_malloc(const struct fsm *fsm, size_t sz);
-
-/*
- * Internal realloc function that invokes realloc(3) by default, or a user-provided
- * realloc function to re-allocate memory to the specified size and perform
- * any custom memory tracking or handling
- */
-void *
-f_realloc(const struct fsm *fsm, void *p, size_t sz);
 
 /*
  * Duplicate an FSM.
@@ -118,7 +94,7 @@ fsm_removestate(struct fsm *fsm, struct fsm_state *state);
 /*
  * Add an edge from a given state to a given state, labelled with the given
  * label. If an edge to that state of the same label already exists, the
- * existing edge is returned.
+ * existing edge is used instead, and a new edge is not added.
  *
  * Edges may be one of the following types:
  *
@@ -126,15 +102,15 @@ fsm_removestate(struct fsm *fsm, struct fsm_state *state);
  * - Any character
  * - A literal character. The character '\0' is permitted.
  *
- * Returns false on error; see errno.
+ * Returns 1 on success, or 0 on error; see errno.
  */
-struct fsm_edge *
+int
 fsm_addedge_epsilon(struct fsm *fsm, struct fsm_state *from, struct fsm_state *to);
 
-struct fsm_edge *
+int
 fsm_addedge_any(struct fsm *fsm, struct fsm_state *from, struct fsm_state *to);
 
-struct fsm_edge *
+int
 fsm_addedge_literal(struct fsm *fsm, struct fsm_state *from, struct fsm_state *to,
 	char c);
 
@@ -258,10 +234,17 @@ fsm_mergestates(struct fsm *fsm, struct fsm_state *a, struct fsm_state *b);
  * unreachable states (i.e. those in a subgraph which is disjoint from
  * the state state's connected component), and non-end states which
  * do not have a path to an end state.
+ *
+ * Returns how many states were removed, or -1 on error.
  */
 int
 fsm_trim(struct fsm *fsm);
 
+/*
+ * Produce a short legible string that matches up to a goal state.
+ *
+ * The given FSM is expected to be a Glushkov NFA.
+ */
 int
 fsm_example(const struct fsm *fsm, const struct fsm_state *goal,
 	char *buf, size_t bufsz);
@@ -336,11 +319,13 @@ fsm_equal(const struct fsm *a, const struct fsm *b);
  * A discovered path is returned, or NULL on error. If the goal is not
  * reachable, then the path returned will be non-NULL but will not contain
  * the goal state.
+ *
+ * The given FSM is expected to be a Glushkov NFA.
  */
 struct path *
 fsm_shortest(const struct fsm *fsm,
 	const struct fsm_state *start, const struct fsm_state *goal,
-	unsigned (*cost)(const struct fsm_state *from, const struct fsm_state *to, int c));
+	unsigned (*cost)(const struct fsm_state *from, const struct fsm_state *to, char c));
 
 /*
  * Execute an FSM reading input from the user-specified callback fsm_getc().

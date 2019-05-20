@@ -10,16 +10,20 @@
 #include <adt/set.h>
 #include <adt/priq.h>
 #include <adt/path.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/fsm.h>
 #include <fsm/cost.h>
+#include <fsm/pred.h>
+#include <fsm/walk.h>
 
 #include "internal.h"
 
 struct path *
 fsm_shortest(const struct fsm *fsm,
 	const struct fsm_state *start, const struct fsm_state *goal,
-	unsigned (*cost)(const struct fsm_state *from, const struct fsm_state *to, int c))
+	unsigned (*cost)(const struct fsm_state *from, const struct fsm_state *to, char c))
 {
 	struct priq *todo, *done;
 	struct priq *u;
@@ -41,7 +45,14 @@ fsm_shortest(const struct fsm *fsm,
 	 *
 	 * Distance between edges (cost) is unsigned, with UINT_MAX to represent
 	 * infinity.
+	 *
+	 * We limit ourselves to epsilon-free FSM only just for simplicity of the
+	 * implementation; the algorithm itself works jsut as well for NFA if a
+	 * cost can be assigned to epsilon transitions. Ensuring there are no
+	 * epsilons makes for a simpler API.
 	 */
+
+	assert(!fsm_has(fsm, fsm_hasepsilons));
 
 	todo = NULL;
 	done = NULL;
@@ -52,17 +63,17 @@ fsm_shortest(const struct fsm *fsm,
 		struct fsm_state *s;
 
 		for (s = fsm->sl; s != NULL; s = s->next) {
-			u = priq_push(&todo, s, s == fsm_getstart(fsm) ? 0 : FSM_COST_INFINITY);
+			u = priq_push(fsm->opt->alloc, &todo, s, s == fsm_getstart(fsm) ? 0 : FSM_COST_INFINITY);
 			if (u == NULL) {
 				goto error;
 			}
 
 			/*
-			 * We consider the first state to be reached by an epsilon;
-			 * this is effectively the entry into the FSM.
+			 * It's non-sensical to describe the start state as being reached
+			 * by a symbol; this field is not used.
 			 */
 			if (s == fsm_getstart(fsm)) {
-				u->type = FSM_EDGE_EPSILON;
+				u->c = '\0';
 			}
 		}
 	}
@@ -70,7 +81,7 @@ fsm_shortest(const struct fsm *fsm,
 	while (u = priq_pop(&todo), u != NULL) {
 		const struct fsm_state *s;
 		struct fsm_edge *e;
-		struct set_iter it;
+		struct edge_iter it;
 
 		priq_move(&done, u);
 
@@ -83,10 +94,10 @@ fsm_shortest(const struct fsm *fsm,
 			goto done;
 		}
 
-		for (e = set_first(u->state->edges, &it); e != NULL; e = set_next(&it)) {
-			struct set_iter jt;
+		for (e = edge_set_first(u->state->edges, &it); e != NULL; e = edge_set_next(&it)) {
+			struct state_iter jt;
 
-			for (s = set_first(e->sl, &jt); s != NULL; s = set_next(&jt)) {
+			for (s = state_set_first(e->sl, &jt); s != NULL; s = state_set_next(&jt)) {
 				struct priq *v;
 				unsigned c;
 
@@ -106,7 +117,7 @@ fsm_shortest(const struct fsm *fsm,
 				if (v->cost > u->cost + c) {
 					v->cost = u->cost + c;
 					v->prev = u;
-					v->type = e->symbol;
+					v->c    = e->symbol;
 
 					priq_update(&todo, v, v->cost);
 				}
@@ -117,13 +128,13 @@ fsm_shortest(const struct fsm *fsm,
 done:
 
 	for (u = priq_find(done, goal); u != NULL; u = u->prev) {
-		if (!path_push(&path, u->state, u->type)) {
+		if (!path_push(fsm->opt->alloc, &path, u->state, u->c)) {
 			goto error;
 		}
 	}
 
-	priq_free(todo);
-	priq_free(done);
+	priq_free(fsm->opt->alloc, todo);
+	priq_free(fsm->opt->alloc, done);
 
 	return path;
 
@@ -139,21 +150,21 @@ none:
 	 * (otherwise we would have been able to reach it).
 	 */
 
-	if (!path_push(&path, u->state, u->type)) {
+	if (!path_push(fsm->opt->alloc, &path, u->state, u->c)) {
 		goto error;
 	}
 
-	priq_free(todo);
-	priq_free(done);
+	priq_free(fsm->opt->alloc, todo);
+	priq_free(fsm->opt->alloc, done);
 
 	return path;
 
 error:
 
-	priq_free(todo);
-	priq_free(done);
+	priq_free(fsm->opt->alloc, todo);
+	priq_free(fsm->opt->alloc, done);
 
-	path_free(path);
+	path_free(fsm->opt->alloc, path);
 
 	return NULL;
 }

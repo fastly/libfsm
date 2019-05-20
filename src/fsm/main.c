@@ -24,6 +24,33 @@
 
 #include "parser.h"
 
+#if defined(__APPLE__) && defined(__MACH__) && defined(MACOS_HAS_NO_CLOCK_GETTME)
+#include <mach/clock.h>
+#include <mach/mach.h>
+
+/* we're running Darwin/macOS, so we don't necessarily have clock_gettime,
+ * so we do it the ugly way...
+ */
+
+#define CLOCK_MONOTONIC 0
+static int clock_gettime(int clk_id, struct timespec *ts)
+{
+	clock_serv_t cclock;
+	mach_timespec_t mts;
+
+	(void)clk_id;
+
+	host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
+	clock_get_time(cclock, &mts);
+	mach_port_deallocate(mach_task_self(), cclock);
+
+	ts->tv_sec = mts.tv_sec;
+	ts->tv_nsec = mts.tv_nsec;
+
+	return 0;
+}
+#endif /* defined(__APPLE__) && defined(__MACH__) && !defined(MACOS_HAS_CLOCK_GETTME) */
+
 extern int optind;
 extern char *optarg;
 
@@ -158,14 +185,19 @@ static int
 			int (*)(const struct fsm *, const struct fsm_state *));
 		int (*pred)(const struct fsm *, const struct fsm_state *);
 	} a[] = {
-		{ "isdfa",      fsm_all, fsm_isdfa         },
-		{ "dfa",        fsm_all, fsm_isdfa         },
-		{ "count",      NULL,    query_countstates },
-		{ "iscomplete", fsm_all, fsm_iscomplete    },
-		{ "hasend",     fsm_has, fsm_isend         },
-		{ "end",        fsm_has, fsm_isend         },
-		{ "accept",     fsm_has, fsm_isend         },
-		{ "hasaccept",  fsm_has, fsm_isend         }
+		{ "isdfa",             fsm_all, fsm_isdfa             },
+		{ "dfa",               fsm_all, fsm_isdfa             },
+		{ "count",             NULL,    query_countstates     },
+		{ "iscomplete",        fsm_all, fsm_iscomplete        },
+		{ "hasend",            fsm_has, fsm_isend             },
+		{ "end",               fsm_has, fsm_isend             },
+		{ "accept",            fsm_has, fsm_isend             },
+		{ "hasaccept",         fsm_has, fsm_isend             },
+		{ "ambiguity",         fsm_has, fsm_hasnondeterminism },
+		{ "hasambiguity",      fsm_has, fsm_hasnondeterminism },
+		{ "hasnondeterminism", fsm_has, fsm_hasnondeterminism },
+		{ "hasepsilons",       fsm_has, fsm_hasepsilons       },
+		{ "epsilons",          fsm_has, fsm_hasepsilons       }
 	};
 
 	assert(name != NULL);

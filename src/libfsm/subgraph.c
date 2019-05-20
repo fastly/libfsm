@@ -8,7 +8,10 @@
 #include <stdlib.h>
 #include <stddef.h>
 
+#include <adt/alloc.h>
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 #include <adt/xalloc.h>
 
 #include <fsm/fsm.h>
@@ -43,14 +46,14 @@ mapping_ensure(struct fsm *fsm, struct mapping **head, struct fsm_state *old)
 
 	/* Otherwise, make a new one */
 	{
-		m = f_malloc(fsm, sizeof *m);
+		m = f_malloc(fsm->opt->alloc, sizeof *m);
 		if (m == NULL) {
 			return 0;
 		}
 
 		m->new = fsm_addstate(fsm);
 		if (m->new == NULL) {
-			f_free(fsm, m);
+			f_free(fsm->opt->alloc, m);
 			return 0;
 		}
 
@@ -75,7 +78,7 @@ mapping_free(const struct fsm *fsm, struct mapping *mapping)
 	for (m = mapping; m != NULL; m = next) {
 		next = m->next;
 
-		f_free(fsm, m);
+		f_free(fsm->opt->alloc, m);
 	}
 }
 
@@ -128,7 +131,8 @@ fsm_state_duplicatesubgraphx(struct fsm *fsm, struct fsm_state *state,
 	/* TODO: errors leave fsm in a questionable state */
 
 	while (m = getnextnotdone(mappings), m != NULL) {
-		struct set_iter it, jt;
+		struct edge_iter it;
+		struct state_iter jt;
 		struct fsm_state *s;
 		struct fsm_edge *e;
 
@@ -136,8 +140,8 @@ fsm_state_duplicatesubgraphx(struct fsm *fsm, struct fsm_state *state,
 			*x = m->new;
 		}
 
-		for (e = set_first(m->old->edges, &it); e != NULL; e = set_next(&it)) {
-			for (s = set_first(e->sl, &jt); s != NULL; s = set_next(&jt)) {
+		{
+			for (s = state_set_first(m->old->epsilons, &jt); s != NULL; s = state_set_next(&jt)) {
 				struct mapping *to;
 
 				assert(s != NULL);
@@ -148,7 +152,24 @@ fsm_state_duplicatesubgraphx(struct fsm *fsm, struct fsm_state *state,
 					return NULL;
 				}
 
-				if (!fsm_addedge(m->new, to->new, e->symbol)) {
+				if (!fsm_addedge_epsilon(fsm, m->new, to->new)) {
+					return NULL;
+				}
+			}
+		}
+		for (e = edge_set_first(m->old->edges, &it); e != NULL; e = edge_set_next(&it)) {
+			for (s = state_set_first(e->sl, &jt); s != NULL; s = state_set_next(&jt)) {
+				struct mapping *to;
+
+				assert(s != NULL);
+
+				to = mapping_ensure(fsm, &mappings, s);
+				if (to == NULL) {
+					mapping_free(fsm, mappings);
+					return NULL;
+				}
+
+				if (!fsm_addedge_literal(fsm, m->new, to->new, e->symbol)) {
 					return NULL;
 				}
 			}

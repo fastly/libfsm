@@ -8,6 +8,8 @@
 #include <stddef.h>
 
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/pred.h>
 
@@ -17,14 +19,19 @@ int
 fsm_hasoutgoing(const struct fsm *fsm, const struct fsm_state *state)
 {
 	struct fsm_edge *e;
-	struct set_iter it;
+	struct edge_iter it;
 
 	assert(fsm != NULL);
 	assert(state != NULL);
 
 	(void) fsm;
-	for (e = set_first(state->edges, &it); e != NULL; e = set_next(&it)) {
-		if (!set_empty(e->sl)) {
+
+	if (!state_set_empty(state->epsilons)) {
+		return 1;
+	}
+
+	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
+		if (!state_set_empty(e->sl)) {
 			return 1;
 		}
 	}

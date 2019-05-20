@@ -14,8 +14,11 @@
 
 #include <print/esc.h>
 
+#include <adt/alloc.h>
 #include <adt/set.h>
 #include <adt/bitmap.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
@@ -115,7 +118,7 @@ fsm_print_api(FILE *f, const struct fsm *fsm)
 	fprintf(f, "\t}\n");
 	fprintf(f, "\n");
 
-	a = f_malloc(fsm, n * sizeof *a);
+	a = f_malloc(fsm->opt->alloc, n * sizeof *a);
 	if (a == NULL) {
 		/* XXX */
 		return;
@@ -124,7 +127,8 @@ fsm_print_api(FILE *f, const struct fsm *fsm)
 	for (s = fsm->sl; s != NULL; s = s->next) {
 		struct fsm_edge *e;
 		struct fsm_state *st;
-		struct set_iter it, jt;
+		struct edge_iter it;
+		struct state_iter jt;
 		unsigned int from, to;
 		unsigned int i;
 
@@ -134,17 +138,20 @@ fsm_print_api(FILE *f, const struct fsm *fsm)
 			bm_clear(&a[i]);
 		}
 
-		for (e = set_first(s->edges, &it); e != NULL; e = set_next(&it)) {
-			for (st = set_first(e->sl, &jt); st != NULL; st = set_next(&jt)) {
+		for (st = state_set_first(s->epsilons, &jt); st != NULL; st = state_set_next(&jt)) {
+			assert(st != NULL);
+
+			to = indexof(fsm, st);
+
+			fprintf(f, "\tif (!fsm_addedge_epsilon(fsm, s[%u], s[%u])) { goto error; }\n",
+				from, to);
+		}
+
+		for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
+			for (st = state_set_first(e->sl, &jt); st != NULL; st = state_set_next(&jt)) {
 				assert(st != NULL);
 
 				to = indexof(fsm, st);
-
-				if (e->symbol == FSM_EDGE_EPSILON) {
-					fprintf(f, "\tif (!fsm_addedge_epsilon(fsm, s[%u], s[%u])) { goto error; }\n",
-						from, to);
-					continue;
-				}
 
 				bm_set(&a[indexof(fsm, st)], e->symbol);
 			}
@@ -164,7 +171,7 @@ fsm_print_api(FILE *f, const struct fsm *fsm)
 						break;
 				}
 
-				/* end of range */
+				/* one past the end of range */
 				hi = bm_next(&a[to], lo, 0);
 
 				if (lo == 0x00 && hi == UCHAR_MAX + 1) {
@@ -192,7 +199,7 @@ fsm_print_api(FILE *f, const struct fsm *fsm)
 		}
 	}
 
-	f_free(fsm, a);
+	f_free(fsm->opt->alloc, a);
 
 	fprintf(f, "\n");
 

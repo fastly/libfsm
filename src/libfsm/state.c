@@ -6,29 +6,16 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include <adt/alloc.h>
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/fsm.h>
 
 #include "internal.h"
-
-static int
-fsm_state_cmpedges(const void *a, const void *b)
-{
-	const struct fsm_edge *ea, *eb;
-
-	assert(a != NULL);
-	assert(b != NULL);
-
-	ea = a;
-	eb = b;
-
-	/* N.B. various edge iterations rely on the ordering of edges to be in
-	 * ascending order.
-	 */
-	return (ea->symbol > eb->symbol) - (ea->symbol < eb->symbol);
-}
 
 struct fsm_state *
 fsm_addstate(struct fsm *fsm)
@@ -37,18 +24,24 @@ fsm_addstate(struct fsm *fsm)
 
 	assert(fsm != NULL);
 
-	new = f_malloc(fsm, sizeof *new);
+	new = f_malloc(fsm->opt->alloc, sizeof *new);
 	if (new == NULL) {
 		return NULL;
 	}
 
 	new->end = 0;
-	new->edges = set_create(fsm_state_cmpedges);
 	new->opaque = NULL;
 
-#ifdef DEBUG_TODFA
-	new->nfasl = NULL;
-#endif
+	/*
+	 * Sets for epsilon and labelled transitions are kept NULL
+	 * until populated; this suits the most nodes in the bodies of
+	 * typical FSM that do not have epsilons, and (less often)
+	 * nodes that have no edges.
+	 */
+	new->epsilons = NULL;
+	new->edges    = NULL;
+
+	fsm_state_clear_tmp(new);
 
 	*fsm->tail = new;
 	new->next = NULL;
@@ -58,11 +51,17 @@ fsm_addstate(struct fsm *fsm)
 }
 
 void
+fsm_state_clear_tmp(struct fsm_state *state)
+{
+	memset(&state->tmp, 0x00, sizeof(state->tmp));
+}
+
+void
 fsm_removestate(struct fsm *fsm, struct fsm_state *state)
 {
 	struct fsm_state *s;
 	struct fsm_edge *e;
-	struct set_iter it;
+	struct edge_iter it;
 
 	assert(fsm != NULL);
 	assert(state != NULL);
@@ -71,16 +70,18 @@ fsm_removestate(struct fsm *fsm, struct fsm_state *state)
 	fsm_setend(fsm, state, 0);
 
 	for (s = fsm->sl; s != NULL; s = s->next) {
-		for (e = set_first(s->edges, &it); e != NULL; e = set_next(&it)) {
-			set_remove(&e->sl, state);
+		state_set_remove(s->epsilons, state);
+		for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
+			state_set_remove(e->sl, state);
 		}
 	}
 
-	for (e = set_first(state->edges, &it); e != NULL; e = set_next(&it)) {
-		set_free(e->sl);
-		f_free(fsm, e);
+	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
+		state_set_free(e->sl);
+		f_free(fsm->opt->alloc, e);
 	}
-	set_free(state->edges);
+	state_set_free(state->epsilons);
+	edge_set_free(state->edges);
 
 	if (fsm->start == state) {
 		fsm->start = NULL;
@@ -101,7 +102,7 @@ fsm_removestate(struct fsm *fsm, struct fsm_state *state)
 				}
 
 				next = (*p)->next;
-				f_free(fsm, *p);
+				f_free(fsm->opt->alloc, *p);
 				*p = next;
 				break;
 			}

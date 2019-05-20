@@ -8,6 +8,8 @@
 #include <stddef.h>
 
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/pred.h>
 
@@ -23,10 +25,14 @@ fsm_hasincoming(const struct fsm *fsm, const struct fsm_state *state)
 
 	for (s = fsm->sl; s != NULL; s = s->next) {
 		struct fsm_edge *e;
-		struct set_iter it;
+		struct edge_iter it;
 
-		for (e = set_first(s->edges, &it); e != NULL; e = set_next(&it)) {
-			if (set_contains(e->sl, state)) {
+		if (state_set_contains(s->epsilons, state)) {
+			return 1;
+		}
+
+		for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
+			if (e->sl != NULL && state_set_contains(e->sl, state)) {
 				return 1;
 			}
 		}

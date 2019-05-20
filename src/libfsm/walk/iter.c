@@ -7,9 +7,12 @@
 #include <assert.h>
 #include <stddef.h>
 
+#include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
+
 #include <fsm/fsm.h>
 #include <fsm/walk.h>
-#include <adt/set.h>
 
 #include "../internal.h"
 
@@ -52,13 +55,13 @@ fsm_walk_edges(const struct fsm *fsm, void *opaque,
 	assert(callback != NULL);
 
 	for (src = fsm->sl; src != NULL; src = src->next) {
-		struct set_iter ei;
+		struct edge_iter ei;
 		const struct fsm_edge *e;
 
-		for (e = set_first(src->edges, &ei); e != NULL; e=set_next(&ei)) {
-			struct set_iter di;
+		for (e = edge_set_first(src->edges, &ei); e != NULL; e=edge_set_next(&ei)) {
+			struct state_iter di;
 			const struct fsm_state *dst;
-			for (dst = set_first(e->sl, &di); dst != NULL; dst=set_next(&di)) {
+			for (dst = state_set_first(e->sl, &di); dst != NULL; dst=state_set_next(&di)) {
 				if (!callback(fsm, src, (unsigned int)e->symbol, dst, opaque)) {
 					return 0;
 				}

@@ -9,6 +9,8 @@
 #include <string.h>
 
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/pred.h>
 
@@ -17,8 +19,8 @@
 int
 fsm_isdfa(const struct fsm *fsm, const struct fsm_state *state)
 {
-	struct fsm_edge *e, s;
-	struct set_iter it;
+	struct fsm_edge *e;
+	struct edge_iter it;
 
 	assert(fsm != NULL);
 
@@ -32,28 +34,22 @@ fsm_isdfa(const struct fsm *fsm, const struct fsm_state *state)
 	/*
 	 * DFA may not have epsilon edges.
 	 */
-	s.symbol = FSM_EDGE_EPSILON;
-	e = set_contains(state->edges, &s);
-	if (e != NULL && !set_empty(e->sl)) {
+	if (!state_set_empty(state->epsilons)) {
 		return 0;
 	}
 
 	/*
 	 * DFA may not have duplicate edges.
 	 */
-	for (e = set_first(state->edges, &it); e != NULL; e = set_next(&it)) {
-		struct set_iter jt;
+	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
+		struct state_iter jt;
 
-		if (e->symbol > UCHAR_MAX) {
-			break;
-		}
-
-		if (set_empty(e->sl)) {
+		if (state_set_empty(e->sl)) {
 			continue;
 		}
 
-		(void) set_first(e->sl, &jt);
-		if (set_hasnext(&jt)) {
+		(void) state_set_first(e->sl, &jt);
+		if (state_set_hasnext(&jt)) {
 			return 0;
 		}
 	}

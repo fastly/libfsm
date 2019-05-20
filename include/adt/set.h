@@ -4,9 +4,10 @@
  * See LICENCE for the full copyright terms.
  */
 
-#ifndef SET_H
-#define SET_H
+#ifndef ADT_SET_H
+#define ADT_SET_H
 
+struct fsm_alloc;
 struct set;
 
 struct set_iter {
@@ -15,13 +16,27 @@ struct set_iter {
 };
 
 struct set *
-set_create(int (*cmp)(const void *a, const void *b));
+set_create(const struct fsm_alloc *a,
+	int (*cmp)(const void *a, const void *b));
+
+struct set *
+set_create_singleton(const struct fsm_alloc *a,
+	int (*cmp)(const void *a, const void *b), void *item);
+
+struct set *
+set_create_from_array(const struct fsm_alloc *a,
+	void *items[], size_t n,
+	int (*cmp)(const void *a, const void *b),
+	int (*bulkcmp)(const void *, const void *));
+
+struct set *
+set_copy(const struct set *set);
 
 void *
-set_add(struct set **set, void *item);
+set_add(struct set *set, void *item);
 
 void
-set_remove(struct set **set, void *item);
+set_remove(struct set *set, const void *item);
 
 void
 set_free(struct set *set);
@@ -57,7 +72,7 @@ void *
 set_first(const struct set *set, struct set_iter *it);
 
 void *
-set_firstafter(const struct set *set, struct set_iter *it, void *item);
+set_firstafter(const struct set *set, struct set_iter *it, const void *item);
 
 void *
 set_next(struct set_iter *it);

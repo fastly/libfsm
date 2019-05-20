@@ -13,8 +13,11 @@
 
 #include <print/esc.h>
 
+#include <adt/alloc.h>
 #include <adt/set.h>
 #include <adt/bitmap.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
@@ -81,10 +84,10 @@ static struct ir_group *
 make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct fsm_state *mode,
 	size_t *u)
 {
-	struct range ranges[UCHAR_MAX]; /* worst case */
+	struct range ranges[FSM_SIGMA_COUNT]; /* worst case, one per symbol */
 	struct ir_group *groups;
 	struct fsm_edge *e;
-	struct set_iter it;
+	struct edge_iter it;
 	size_t i, j, k;
 	size_t n;
 
@@ -102,18 +105,14 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 
 	n = 0;
 
-	for (e = set_first(state->edges, &it); e != NULL; e = set_next(&it)) {
+	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
 		struct fsm_state *s;
 
-		if (e->symbol > UCHAR_MAX) {
-			break;
-		}
-
-		if (set_empty(e->sl)) {
+		if (state_set_empty(e->sl)) {
 			continue;
 		}
 
-		s = set_only(e->sl);
+		s = state_set_only(e->sl);
 		if (s == mode) {
 			continue;
 		}
@@ -126,25 +125,25 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 			do {
 				const struct fsm_edge *ne;
 				const struct fsm_state *ns;
-				struct set_iter jt;
+				struct edge_iter jt;
 
-				ne = set_firstafter(state->edges, &jt, e);
+				ne = edge_set_firstafter(state->edges, &jt, e);
 				if (ne == NULL || ne->symbol != e->symbol + 1) {
 					break;
 				}
 
-				if (set_empty(ne->sl)) {
+				if (state_set_empty(ne->sl)) {
 					break;
 				}
 
-				ns = set_only(ne->sl);
+				ns = state_set_only(ne->sl);
 				if (ns == mode || ns != s) {
 					break;
 				}
 
 				ranges[n].end = ne->symbol;
 
-				e = set_next(&it);
+				e = edge_set_next(&it);
 			} while (e != NULL);
 		}
 
@@ -160,7 +159,7 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 
 	qsort(ranges, n, sizeof *ranges, range_cmp);
 
-	groups = f_malloc(fsm, sizeof *groups * n); /* worst case */
+	groups = f_malloc(fsm->opt->alloc, sizeof *groups * n); /* worst case */
 	if (groups == NULL) {
 		return NULL;
 	}
@@ -174,7 +173,7 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 
 		to = ranges[i].to;
 
-		p = f_malloc(fsm, sizeof *p * (n - i)); /* worst case */
+		p = f_malloc(fsm->opt->alloc, sizeof *p * (n - i)); /* worst case */
 		if (p == NULL) {
 			j++;
 			goto error;
@@ -196,7 +195,7 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 		{
 			void *tmp;
 
-			tmp = f_realloc(fsm, p, sizeof *p * k);
+			tmp = f_realloc(fsm->opt->alloc, p, sizeof *p * k);
 			if (tmp == NULL) {
 				j++;
 				goto error;
@@ -215,7 +214,7 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 	{
 		void *tmp;
 
-		tmp = f_realloc(fsm, groups, sizeof *groups * j);
+		tmp = f_realloc(fsm->opt->alloc, groups, sizeof *groups * j);
 		if (tmp == NULL) {
 			goto error;
 		}
@@ -228,10 +227,10 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 error:
 
 	for (i = 0; i < j; i++) {
-		f_free(fsm, (void *) groups[i].ranges);
+		f_free(fsm->opt->alloc, (void *) groups[i].ranges);
 	}
 
-	f_free(fsm, groups);
+	f_free(fsm->opt->alloc, groups);
 
 	return NULL;
 }
@@ -242,10 +241,10 @@ free_groups(const struct fsm *fsm, struct ir_group *groups, size_t n)
 	size_t j;
 
 	for (j = 0; j < n; j++) {
-		f_free(fsm, (void *) groups[j].ranges);
+		f_free(fsm->opt->alloc, (void *) groups[j].ranges);
 	}
 
-	f_free(fsm, groups);
+	f_free(fsm->opt->alloc, groups);
 }
 
 static void
@@ -308,7 +307,7 @@ make_holes(const struct fsm *fsm, const struct bm *bm, size_t *n)
 	assert(bm != NULL);
 	assert(n != NULL);
 
-	ranges = f_malloc(fsm, sizeof *ranges * UCHAR_MAX); /* worst case */
+	ranges = f_malloc(fsm->opt->alloc, sizeof *ranges * FSM_SIGMA_COUNT); /* worst case */
 	if (ranges == NULL) {
 		return NULL;
 	}
@@ -323,7 +322,7 @@ make_holes(const struct fsm *fsm, const struct bm *bm, size_t *n)
 			break;
 		}
 
-		/* end of range */
+		/* one past the end of range */
 		hi = bm_next(bm, lo, 1);
 
 		ranges[*n].start = lo;
@@ -335,7 +334,7 @@ make_holes(const struct fsm *fsm, const struct bm *bm, size_t *n)
 	{
 		void *tmp;
 
-		tmp = f_realloc(fsm, ranges, sizeof *ranges * *n);
+		tmp = f_realloc(fsm->opt->alloc, ranges, sizeof *ranges * *n);
 		if (tmp == NULL) {
 			goto error;
 		}
@@ -347,7 +346,7 @@ make_holes(const struct fsm *fsm, const struct bm *bm, size_t *n)
 
 error:
 
-	f_free(fsm, ranges);
+	f_free(fsm->opt->alloc, ranges);
 
 	return NULL;
 }
@@ -377,11 +376,7 @@ make_state(const struct fsm *fsm,
 
 	/* no edges */
 	{
-		struct fsm_edge *e;
-		struct set_iter it;
-
-		e = set_first(state->edges, &it);
-		if (!e || e->symbol > UCHAR_MAX) {
+		if (edge_set_empty(state->edges)) {
 			cs->strategy = IR_NONE;
 			return 0;
 		}
@@ -394,7 +389,7 @@ make_state(const struct fsm *fsm,
 	}
 
 	/* all edges go to the same state */
-	if (mode.state != NULL && mode.freq == UCHAR_MAX) {
+	if (mode.state != NULL && mode.freq == FSM_SIGMA_COUNT) {
 		cs->strategy  = IR_SAME;
 		cs->u.same.to = indexof(fsm, mode.state);
 		return 0;
@@ -416,7 +411,7 @@ make_state(const struct fsm *fsm,
 
 	find_coverage(groups, n, &bm);
 
-	hole = UCHAR_MAX - bm_count(&bm);
+	hole = UCHAR_MAX + 1 - bm_count(&bm);
 
 	if (hole == 0) {
 		assert(fsm_iscomplete(fsm, state));
@@ -438,7 +433,7 @@ make_state(const struct fsm *fsm,
 		cs->strategy = IR_ERROR;
 		cs->u.error.mode = groups[max.j].to;
 
-		f_free(fsm, (void *) groups[max.j].ranges);
+		f_free(fsm->opt->alloc, (void *) groups[max.j].ranges);
 		if (max.j < n) {
 			memmove(groups + max.j, groups + max.j + 1, sizeof *groups * (n - max.j - 1));
 			n--;
@@ -484,15 +479,15 @@ make_ir(const struct fsm *fsm)
 		return NULL;
 	}
 
-	ir = f_malloc(fsm, sizeof *ir);
+	ir = f_malloc(fsm->opt->alloc, sizeof *ir);
 	if (ir == NULL) {
 		return NULL;
 	}
 
 	ir->n      = fsm_countstates(fsm);
-	ir->states = f_malloc(fsm, sizeof *ir->states * ir->n);
+	ir->states = f_malloc(fsm->opt->alloc, sizeof *ir->states * ir->n);
 	if (ir->states == NULL) {
-		f_free(fsm, ir);
+		f_free(fsm->opt->alloc, ir);
 		return NULL;
 	}
 
@@ -526,25 +521,32 @@ make_ir(const struct fsm *fsm)
 			 * to the number of states in an fsm, and shorter where
 			 * the graph branches often.
 			 */
-			p = f_malloc(fsm, ir->n + 3 + 1);
+			p = f_malloc(fsm->opt->alloc, ir->n + 3 + 1);
 			if (p == NULL) {
 				goto error_example;
 			}
 
 			n = fsm_example(fsm, s, p, ir->n + 1);
 			if (-1 == n) {
-				f_free(fsm, p);
+				f_free(fsm->opt->alloc, p);
 				goto error_example;
 			}
 
-			if ((size_t) n < ir->n + 1) {
+			/*
+			 * The goal state is always reachable for a DFA with
+			 * no "stray" states, but the caller may not trim an FSM.
+			 */
+			if (n == 0) {
+				f_free(fsm->opt->alloc, p);
+				p = NULL;
+			} else if ((size_t) n < ir->n + 1) {
 				char *tmp;
 
 				n = strlen(p);
 
-				tmp = f_realloc(fsm, p, n + 1);
+				tmp = f_realloc(fsm->opt->alloc, p, n + 1);
 				if (tmp == NULL) {
-					f_free(fsm, p);
+					f_free(fsm->opt->alloc, p);
 					goto error_example;
 				}
 
@@ -589,7 +591,7 @@ free_ir(const struct fsm *fsm, struct ir *ir)
 	assert(ir != NULL);
 
 	for (i = 0; i < ir->n; i++) {
-		f_free(fsm, (void *) ir->states[i].example);
+		f_free(fsm->opt->alloc, (void *) ir->states[i].example);
 
 		switch (ir->states[i].strategy) {
 		case IR_TABLE:
@@ -618,15 +620,15 @@ free_ir(const struct fsm *fsm, struct ir *ir)
 			break;
 
 		case IR_ERROR:
-			f_free(fsm, (void *) ir->states[i].u.error.error.ranges);
+			f_free(fsm->opt->alloc, (void *) ir->states[i].u.error.error.ranges);
 			free_groups(fsm, (void *) ir->states[i].u.error.groups,
 				ir->states[i].u.error.n);
 			break;
 		}
 	}
 
-	f_free(fsm, ir->states);
+	f_free(fsm->opt->alloc, ir->states);
 
-	f_free(fsm, ir);
+	f_free(fsm->opt->alloc, ir);
 }
 

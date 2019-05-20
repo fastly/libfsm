@@ -8,6 +8,8 @@
 #include <stddef.h>
 
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
@@ -21,7 +23,7 @@ fsm_reverse(struct fsm *fsm)
 {
 	struct fsm *new;
 	struct fsm_state *end;
-	struct set *endset;
+	struct state_set *endset;
 
 	assert(fsm != NULL);
 	assert(fsm->opt != NULL);
@@ -56,7 +58,7 @@ fsm_reverse(struct fsm *fsm)
 	 * This isn't anything to do with the reversing; it's meaningful
 	 * only to the caller.
 	 */
-	endset = NULL;
+	endset = state_set_create(fsm->opt->alloc);
 
 	/*
 	 * Create states corresponding to the original FSM's states.
@@ -76,7 +78,7 @@ fsm_reverse(struct fsm *fsm)
 				return 0;
 			}
 
-			s->equiv = p;
+			s->tmp.equiv = p;
 
 			if (s == fsm->start) {
 				end = p;
@@ -84,8 +86,8 @@ fsm_reverse(struct fsm *fsm)
 			}
 
 			if (fsm_isend(fsm, s)) {
-				if (!set_add(&endset, s)) {
-					set_free(endset);
+				if (!state_set_add(endset, s)) {
+					state_set_free(endset);
 					fsm_free(new);
 					return 0;
 				}
@@ -107,29 +109,34 @@ fsm_reverse(struct fsm *fsm)
 		for (s = fsm->sl; s != NULL; s = s->next) {
 			struct fsm_state *to;
 			struct fsm_state *se;
-			struct set_iter it;
+			struct edge_iter it;
 			struct fsm_edge *e;
 
-			to = s->equiv;
+			to = s->tmp.equiv;
 
 			assert(to != NULL);
 
-			for (e = set_first(s->edges, &it); e != NULL; e = set_next(&it)) {
-				struct set_iter jt;
+			{
+				struct state_iter jt;
 
-				for (se = set_first(e->sl, &jt); se != NULL; se = set_next(&jt)) {
-					struct fsm_state *from;
-					struct fsm_edge *edge;
+				for (se = state_set_first(s->epsilons, &jt); se != NULL; se = state_set_next(&jt)) {
+					assert(se->tmp.equiv != NULL);
 
-					assert(se != NULL);
+					if (!fsm_addedge_epsilon(new, se->tmp.equiv, to)) {
+						state_set_free(endset);
+						fsm_free(new);
+						return 0;
+					}
+				}
+			}
+			for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
+				struct state_iter jt;
 
-					from = se->equiv;
+				for (se = state_set_first(e->sl, &jt); se != NULL; se = state_set_next(&jt)) {
+					assert(se->tmp.equiv != NULL);
 
-					assert(from != NULL);
-
-					edge = fsm_addedge(from, to, e->symbol);
-					if (edge == NULL) {
-						set_free(endset);
+					if (!fsm_addedge_literal(new, se->tmp.equiv, to, e->symbol)) {
+						state_set_free(endset);
 						fsm_free(new);
 						return 0;
 					}
@@ -152,7 +159,7 @@ fsm_reverse(struct fsm *fsm)
 	 */
 	if (fsm->endcount > 1) {
 		struct fsm_state *s;
-		struct set_iter it;
+		struct state_iter it;
 
 		/*
 		 * The typical case here is to create a new start state, and to
@@ -177,7 +184,7 @@ fsm_reverse(struct fsm *fsm)
 		if (0 || !fsm->opt->tidy) {
 			s = NULL;
 		} else {
-			for (s = set_first(endset, &it); s != NULL; s = set_next(&it)) {
+			for (s = state_set_first(endset, &it); s != NULL; s = state_set_next(&it)) {
 				if (!fsm_hasincoming(fsm, s)) {
 					break;
 				}
@@ -185,21 +192,21 @@ fsm_reverse(struct fsm *fsm)
 		}
 
 		if (s != NULL) {
-			new->start = s->equiv;
+			new->start = s->tmp.equiv;
 			assert(new->start != NULL);
 		} else {
 			new->start = fsm_addstate(new);
 			if (new->start == NULL) {
-				set_free(endset);
+				state_set_free(endset);
 				fsm_free(new);
 				return 0;
 			}
 		}
 
-		for (s = set_first(endset, &it); s != NULL; s = set_next(&it)) {
+		for (s = state_set_first(endset, &it); s != NULL; s = state_set_next(&it)) {
 			struct fsm_state *state;
 
-			state = s->equiv;
+			state = s->tmp.equiv;
 			assert(state != NULL);
 
 			if (state == new->start) {
@@ -207,14 +214,16 @@ fsm_reverse(struct fsm *fsm)
 			}
 
 			if (!fsm_addedge_epsilon(new, new->start, state)) {
-				set_free(endset);
+				state_set_free(endset);
 				fsm_free(new);
 				return 0;
 			}
 		}
 	}
 
-	set_free(endset);
+	state_set_free(endset);
+	
+	fsm_clear_tmp(fsm);
 
 	fsm_move(fsm, new);
 

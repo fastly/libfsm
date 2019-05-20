@@ -24,12 +24,12 @@ int *next_int(void) {
 }
 
 int main(void) {
-	struct set *s = set_create(cmp_int);
+	struct set *s = set_create(NULL, cmp_int);
 	struct set_iter iter;
 	size_t i;
 	int *p;
 	for (i = 0; i < 5000; i++) {
-		assert(set_add(&s, next_int()));
+		assert(set_add(s, next_int()));
 	}
 	for (i = 0, p = set_first(s, &iter); i < 5000; i++, set_next(&iter)) {
 		assert(p);

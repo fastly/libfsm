@@ -21,9 +21,10 @@ fsm_isany
 fsm_iscomplete
 fsm_isdfa
 fsm_isend
-fsm_hasedge
 fsm_hasincoming
 fsm_hasoutgoing
+fsm_hasepsilons
+fsm_hasnondeterminism
 
 # <fsm/print.h>
 fsm_print_api
@@ -45,7 +46,6 @@ fsm_merge
 fsm_addstate
 fsm_removestate
 
-fsm_addedge
 fsm_addedge_any
 fsm_addedge_epsilon
 fsm_addedge_literal
@@ -92,3 +92,7 @@ fsm_sgetc
 fsm_print_cfrag # XXX: workaround for lx
 make_ir # XXX: workaround for lx
 free_ir # XXX: workaround for lx
+
+fsm_collect_unreachable_states
+fsm_clear_tmp
+fsm_state_clear_tmp

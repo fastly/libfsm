@@ -9,6 +9,8 @@
 #include <limits.h>
 
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/pred.h>
 
@@ -18,7 +20,7 @@ int
 fsm_iscomplete(const struct fsm *fsm, const struct fsm_state *state)
 {
 	struct fsm_edge *e;
-	struct set_iter it;
+	struct edge_iter it;
 	unsigned n;
 
 	assert(fsm != NULL);
@@ -26,20 +28,18 @@ fsm_iscomplete(const struct fsm *fsm, const struct fsm_state *state)
 
 	n = 0;
 
-	/* TODO: assert state is in fsm->sl */
-	for (e = set_first(state->edges, &it); e != NULL; e = set_next(&it)) {
-		/* epsilon transitions have no effect on completeness */
-		if (e->symbol > UCHAR_MAX) {
-			continue;
-		}
+	/* epsilon transitions have no effect on completeness */
+	(void) state->epsilons;
 
-		if (set_empty(e->sl)) {
+	/* TODO: assert state is in fsm->sl */
+	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
+		if (state_set_empty(e->sl)) {
 			continue;
 		}
 
 		n++;
 	}
 
-	return n == UCHAR_MAX + 1;
+	return n == FSM_SIGMA_COUNT;
 }
 

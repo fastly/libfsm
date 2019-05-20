@@ -10,6 +10,7 @@
 #include <errno.h>
 
 #include <adt/set.h>
+#include <adt/stateset.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
@@ -24,11 +25,11 @@ nextstate(const struct fsm_state *state, int c)
 
 	assert(state != NULL);
 
-	if (!(e = fsm_hasedge(state, c))) {
+	if (!(e = fsm_hasedge_literal(state, c))) {
 		return NULL;
 	}
 
-	return set_only(e->sl);
+	return state_set_only(e->sl);
 }
 
 struct fsm_state *

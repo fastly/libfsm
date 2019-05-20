@@ -4,9 +4,10 @@
  * See LICENCE for the full copyright terms.
  */
 
-#ifndef PRIQ_H
-#define PRIQ_H
+#ifndef ADT_PRIQ_H
+#define ADT_PRIQ_H
 
+struct fsm_alloc;
 struct fsm_state;
 
 struct priq {
@@ -16,7 +17,7 @@ struct priq {
 	/* XXX: specific to shortest.c */
 	struct fsm_state *state;
 	struct priq *prev; /* previous node in shortest path */
-	int type; /* XXX: should really be fsm_edge_type */
+	char c;
 };
 
 /*
@@ -29,7 +30,7 @@ priq_pop(struct priq **priq);
  * Enqueue with priority.
  */
 struct priq *
-priq_push(struct priq **priq,
+priq_push(const struct fsm_alloc *a, struct priq **priq,
 	struct fsm_state *state, unsigned int cost);
 
 void
@@ -45,7 +46,7 @@ priq_move(struct priq **priq, struct priq *new);
 
 /* XXX: set operation */
 void
-priq_free(struct priq *priq);
+priq_free(const struct fsm_alloc *a, struct priq *priq);
 
 #endif
 

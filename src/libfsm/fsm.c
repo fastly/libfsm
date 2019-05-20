@@ -8,8 +8,12 @@
 #include <stdlib.h>
 #include <errno.h>
 
+#include <adt/alloc.h>
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
+#include <fsm/alloc.h>
 #include <fsm/fsm.h>
 #include <fsm/print.h>
 #include <fsm/options.h>
@@ -20,56 +24,6 @@
 	switch (0) { case 0: case (pred):; }
 
 void
-f_free(const struct fsm *fsm, void *p)
-{
-	struct fsm_allocator a;
-
-	assert(fsm != NULL);
-	assert(fsm->opt != NULL);
-
-	a = fsm->opt->allocator;
-	if (a.free != NULL) {
-		a.free(a.opaque, p);
-		return;
-	}
-
-	free(p);
-}
-
-void *
-f_malloc(const struct fsm *fsm, size_t sz)
-{
-	struct fsm_allocator a;
-
-	assert(fsm != NULL);
-	assert(fsm->opt != NULL);
-
-	a = fsm->opt->allocator;
-	if (a.malloc != NULL) {
-		return (a.malloc(a.opaque, sz));
-	}
-
-	return malloc(sz);
-}
-
-void *
-f_realloc(const struct fsm*fsm, void *p, size_t sz)
-{
-	struct fsm_allocator a;
-
-	assert(fsm != NULL);
-	assert(fsm->opt != NULL);
-
-	a = fsm->opt->allocator;
-	if (a.realloc != NULL) {
-		return a.realloc(a.opaque, p, sz);
-	}
-
-	return realloc(p, sz);
-}
-
-
-void
 free_contents(struct fsm *fsm)
 {
 	struct fsm_state *next;
@@ -78,17 +32,18 @@ free_contents(struct fsm *fsm)
 	assert(fsm != NULL);
 
 	for (s = fsm->sl; s != NULL; s = next) {
-		struct set_iter it;
+		struct edge_iter it;
 		struct fsm_edge *e;
 		next = s->next;
 
-		for (e = set_first(s->edges, &it); e != NULL; e = set_next(&it)) {
-			set_free(e->sl);
-			f_free(fsm, e);
+		for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
+			state_set_free(e->sl);
+			f_free(fsm->opt->alloc, e);
 		}
 
-		set_free(s->edges);
-		f_free(fsm, s);
+		state_set_free(s->epsilons);
+		edge_set_free(s->edges);
+		f_free(fsm->opt->alloc, s);
 	}
 }
 
@@ -104,7 +59,7 @@ fsm_new(const struct fsm_options *opt)
 
 	f.opt = opt;
 
-	new = f_malloc(&f, sizeof *new);
+	new = f_malloc(f.opt->alloc, sizeof *new);
 	if (new == NULL) {
 		return NULL;
 	}
@@ -117,10 +72,6 @@ fsm_new(const struct fsm_options *opt)
 
 	new->opt = opt;
 
-#ifdef DEBUG_TODFA
-	new->nfa   = NULL;
-#endif
-
 	return new;
 }
 
@@ -131,7 +82,7 @@ fsm_free(struct fsm *fsm)
 
 	free_contents(fsm);
 
-	f_free(fsm, fsm);
+	f_free(fsm->opt->alloc, fsm);
 }
 
 const struct fsm_options *
@@ -164,11 +115,11 @@ fsm_move(struct fsm *dst, struct fsm *src)
 	dst->start    = src->start;
 	dst->endcount = src->endcount;
 
-	f_free(src, src);
+	f_free(src->opt->alloc, src);
 }
 
 void
-fsm_carryopaque(struct fsm *fsm, const struct set *set,
+fsm_carryopaque(struct fsm *fsm, const struct state_set *set,
 	struct fsm *new, struct fsm_state *state)
 {
 	ctassert(sizeof (void *) == sizeof (struct fsm_state *));
@@ -189,7 +140,7 @@ fsm_carryopaque(struct fsm *fsm, const struct set *set,
 	 * and the cast here.
 	 */
 
-	fsm->opt->carryopaque((void *) set_array(set), set_count(set),
+	fsm->opt->carryopaque((void *) state_set_array(set), state_set_count(set),
 		new, state);
 }
 
@@ -221,14 +172,26 @@ fsm_countedges(const struct fsm *fsm)
 	 * should be replaced with something better when possible
 	 */
 	for (src = fsm->sl; src != NULL; src = src->next) {
-		struct set_iter ei;
+		struct edge_iter ei;
 		const struct fsm_edge *e;
 
-		for (e = set_first(src->edges, &ei); e != NULL; e=set_next(&ei)) {
-			assert(n + set_count(e->sl) > n); /* handle overflow with more grace? */
-			n += set_count(e->sl);
+		for (e = edge_set_first(src->edges, &ei); e != NULL; e=edge_set_next(&ei)) {
+			assert(n + state_set_count(e->sl) > n); /* handle overflow with more grace? */
+			n += state_set_count(e->sl);
 		}
 	}
 
 	return n;
+}
+
+void
+fsm_clear_tmp(struct fsm *fsm)
+{
+	struct fsm_state *s;
+
+	assert(fsm != NULL);
+
+	for (s = fsm->sl; s != NULL; s = s->next) {
+		fsm_state_clear_tmp(s);
+	}
 }

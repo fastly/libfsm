@@ -9,6 +9,8 @@
 
 #include <adt/set.h>
 #include <adt/dlist.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/fsm.h>
 
@@ -32,37 +34,37 @@ fsm_reachable(const struct fsm *fsm, const struct fsm_state *state,
 
 	list = NULL;
 
-	if (!dlist_push(&list, (struct fsm_state *) state)) {
+	if (!dlist_push(fsm->opt->alloc, &list, (struct fsm_state *) state)) {
 		return -1;
 	}
 
 	while (p = dlist_nextnotdone(list), p != NULL) {
 		struct fsm_edge *e;
-		struct set_iter it;
+		struct edge_iter it;
 
 		if (any) {
 			if (predicate(fsm, p->state)) {
-				dlist_free(p);
+				dlist_free(fsm->opt->alloc, p);
 				return 1;
 			}
 		} else {
 			if (!predicate(fsm, p->state)) {
-				dlist_free(p);
+				dlist_free(fsm->opt->alloc, p);
 				return 0;
 			}
 		}
 
-		for (e = set_first(p->state->edges, &it); e != NULL; e = set_next(&it)) {
+		for (e = edge_set_first(p->state->edges, &it); e != NULL; e = edge_set_next(&it)) {
 			struct fsm_state *st;
-			struct set_iter jt;
+			struct state_iter jt;
 
-			for (st = set_first(e->sl, &jt); st != NULL; st = set_next(&jt)) {
+			for (st = state_set_first(e->sl, &jt); st != NULL; st = state_set_next(&jt)) {
 				/* not a list operation... */
 				if (dlist_contains(list, st)) {
 					continue;
 				}
 
-				if (!dlist_push(&list, st)) {
+				if (!dlist_push(fsm->opt->alloc, &list, st)) {
 					return -1;
 				}
 			}
@@ -71,7 +73,7 @@ fsm_reachable(const struct fsm *fsm, const struct fsm_state *state,
 		p->done = 1;
 	}
 
-	dlist_free(list);
+	dlist_free(fsm->opt->alloc, list);
 
 	if (any) {
 		return 0;

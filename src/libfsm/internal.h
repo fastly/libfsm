@@ -13,47 +13,53 @@
 #include <fsm/fsm.h>
 #include <fsm/options.h>
 
-#define FSM_ENDCOUNT_MAX ULONG_MAX
-
-struct set;
+struct edge_set;
+struct state_set;
 
 /*
  * The alphabet (Sigma) for libfsm's FSM is arbitrary octets.
  * These octets may or may not spell out UTF-8 sequences,
  * depending on the context in which the FSM is used.
  *
- * Octets are implemented here as (unsigned char) values in C.
- * As an implementation detail, we extend this range from 0..UCHAR_MAX
- * to include "special" edge types after the last valid octet.
- * Currently the only special edge type is the epsilon transition,
- * for Thompson NFA.
+ * Octets are stored as unsigned char for orderability
+ * independent of the signedness of char.
  */
 
-enum fsm_edge_type {
-	FSM_EDGE_EPSILON = UCHAR_MAX + 1
-};
+/*
+ * The highest value of an symbol, the maximum value in Sigma.
+ */
+#define FSM_SIGMA_MAX UCHAR_MAX
 
-#define FSM_EDGE_MAX FSM_EDGE_EPSILON
+/*
+ * The number of non-special symbols in the alphabet.
+ * This is the number of symbols with the value <= UCHAR_MAX.
+ */
+#define FSM_SIGMA_COUNT (FSM_SIGMA_MAX + 1)
+
+#define FSM_ENDCOUNT_MAX ULONG_MAX
 
 struct fsm_edge {
-	struct set *sl;
-	enum fsm_edge_type symbol;
+	struct state_set *sl;
+	unsigned char symbol;
 };
 
 struct fsm_state {
 	unsigned int end:1;
+	unsigned int reachable:1;
 
-	struct set *edges; /* containing `struct fsm_edge *` */
+	struct edge_set *edges;
+	struct state_set *epsilons;
 
 	void *opaque;
 
-	/* temporary relation between one FSM and another;
-	 * meaningful within one particular transformation only */
-	struct fsm_state *equiv;
-
-#ifdef DEBUG_TODFA
-	struct set *nfasl;
-#endif
+	/* these are only valid within one particular transformation.
+	 * expected to be NULL at start and set back to NULL after. */
+	union {
+		/* temporary relation between one FSM and another */
+		struct fsm_state *equiv;
+		/* tracks which states have been visited in walk2 */
+		struct fsm_state *visited;
+	} tmp;
 
 	struct fsm_state *next;
 };
@@ -66,21 +72,45 @@ struct fsm {
 	unsigned long endcount;
 
 	const struct fsm_options *opt;
-
-#ifdef DEBUG_TODFA
-	struct fsm *nfa;
-#endif
 };
 
 struct fsm_edge *
-fsm_hasedge(const struct fsm_state *s, int c);
-
-struct fsm_edge *
-fsm_addedge(struct fsm_state *from, struct fsm_state *to, enum fsm_edge_type type);
+fsm_hasedge_literal(const struct fsm_state *s, char c);
 
 void
-fsm_carryopaque(struct fsm *fsm, const struct set *set,
+fsm_carryopaque(struct fsm *fsm, const struct state_set *set,
 	struct fsm *new, struct fsm_state *state);
+
+void
+fsm_clear_tmp(struct fsm *fsm);
+
+void
+fsm_state_clear_tmp(struct fsm_state *state);
+
+struct state_set *
+epsilon_closure(const struct fsm_state *state, struct state_set *closure);
+
+/*
+ * Internal free function that invokes free(3) by default, or a user-provided
+ * free function to free memory and perform any custom memory tracking or handling
+ */
+void
+f_free(const struct fsm_alloc *a, void *p);
+
+/*
+ * Internal malloc function that invokes malloc(3) by default, or a user-provided
+ * malloc function to allocate memory and perform any custom memory tracking or handling
+ */
+void *
+f_malloc(const struct fsm_alloc *a, size_t sz);
+
+/*
+ * Internal realloc function that invokes realloc(3) by default, or a user-provided
+ * realloc function to re-allocate memory to the specified size and perform
+ * any custom memory tracking or handling
+ */
+void *
+f_realloc(const struct fsm_alloc *a, void *p, size_t sz);
 
 #endif
 

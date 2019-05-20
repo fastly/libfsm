@@ -8,6 +8,8 @@
 #include <stddef.h>
 
 #include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include <fsm/pred.h>
 
@@ -16,26 +18,20 @@
 int
 fsm_epsilonsonly(const struct fsm *fsm, const struct fsm_state *state)
 {
-	struct fsm_edge *e, s;
-	struct set_iter it;
+	struct fsm_edge *e;
+	struct edge_iter it;
 
 	assert(fsm != NULL);
 	assert(state != NULL);
 
 	(void) fsm;
 
-	s.symbol = FSM_EDGE_EPSILON;
-	e = set_contains(state->edges, &s);
-	if (e == NULL || set_empty(e->sl)) {
+	if (state_set_empty(state->epsilons)) {
 		return 0;
 	}
 
-	for (e = set_first(state->edges, &it); e != NULL; e = set_next(&it)) {
-		if (e->symbol == FSM_EDGE_EPSILON) {
-			continue;
-		}
-
-		if (!set_empty(e->sl)) {
+	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
+		if (!state_set_empty(e->sl)) {
 			return 0;
 		}
 	}
