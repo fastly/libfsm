@@ -1,4 +1,5 @@
 .MAKEFLAGS: -r -m share/mk
+.MAKE.JOB.PREFIX=
 
 # targets
 all::  mkdir .WAIT dep .WAIT lib prog
@@ -31,6 +32,7 @@ SUBDIR += src/libfsm/cost
 SUBDIR += src/libfsm/pred
 SUBDIR += src/libfsm/print
 SUBDIR += src/libfsm/walk
+SUBDIR += src/libfsm/vm
 SUBDIR += src/libfsm
 SUBDIR += src/libre/class
 SUBDIR += src/libre/dialect
@@ -38,14 +40,17 @@ SUBDIR += src/libre/print
 SUBDIR += src/libre
 SUBDIR += src/fsm
 SUBDIR += src/re
+SUBDIR += src/retest
 SUBDIR += src/lx/print
 SUBDIR += src/lx
 SUBDIR += src
 SUBDIR += tests/complement
 SUBDIR += tests/intersect
 SUBDIR += tests/ir
+SUBDIR += tests/eclosure
 SUBDIR += tests/subtract
 SUBDIR += tests/determinise
+SUBDIR += tests/glush
 SUBDIR += tests/glob
 SUBDIR += tests/like
 SUBDIR += tests/literal
@@ -54,12 +59,15 @@ SUBDIR += tests/literal
 SUBDIR += tests/minimise
 SUBDIR += tests/native
 SUBDIR += tests/pcre
+SUBDIR += tests/pcre-classes
 SUBDIR += tests/pcre-anchor
+SUBDIR += tests/pcre-repeat
 SUBDIR += tests/pred
 SUBDIR += tests/reverse
 SUBDIR += tests/trim
 SUBDIR += tests/union
 SUBDIR += tests/set
+SUBDIR += tests/stateset
 SUBDIR += tests/sql
 SUBDIR += tests/hashset
 SUBDIR += tests/queue
@@ -71,9 +79,6 @@ SUBDIR += theft
 SUBDIR += pc
 
 INCDIR += include
-
-test::
-	grep FAIL ${BUILD}/tests/*/res*; [ $$? -ne 0 ]
 
 .include <subdir.mk>
 .include <pc.mk>
@@ -89,4 +94,7 @@ test::
 .include <mkdir.mk>
 .include <install.mk>
 .include <clean.mk>
+
+test::
+	grep FAIL ${BUILD}/tests/*/res*; [ $$? -ne 0 ]
 

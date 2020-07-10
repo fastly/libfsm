@@ -4,25 +4,18 @@
  * See LICENCE for the full copyright terms.
  */
 
+#include <assert.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <ctype.h>
+
+#include <re/re.h>
 
 #include <print/esc.h>
 
-#include "../re_ast.h"
-#include "../re_char_class.h"
+#include "../class.h"
+#include "../ast.h"
 #include "../print.h"
-
-static void
-re_flags_print(FILE *f, enum re_flags fl);
-
-static void
-cc_pp_iter(FILE *f, const struct fsm_options *opt,
-	const void *parent, struct re_char_class_ast *n);
-
-static void
-print_range_endpoint(FILE *f, const struct fsm_options *opt,
-	const struct ast_range_endpoint *r);
 
 static void
 fprintf_count(FILE *f, unsigned count)
@@ -31,6 +24,35 @@ fprintf_count(FILE *f, unsigned count)
 		fprintf(f, "&#x221e;");
 	} else {
 		fprintf(f, "%u", count);
+	}
+}
+
+static void
+re_flags_print(FILE *f, enum re_flags fl)
+{
+	if (fl & RE_ICASE  ) { fprintf(f, "i"); }
+	if (fl & RE_TEXT   ) { fprintf(f, "g"); }
+	if (fl & RE_MULTI  ) { fprintf(f, "m"); }
+	if (fl & RE_REVERSE) { fprintf(f, "r"); }
+	if (fl & RE_SINGLE ) { fprintf(f, "s"); }
+	if (fl & RE_ZONE   ) { fprintf(f, "z"); }
+}
+
+static void
+print_endpoint(FILE *f, const struct fsm_options *opt, const struct ast_endpoint *e)
+{
+	switch (e->type) {
+	case AST_ENDPOINT_LITERAL:
+		dot_escputc_html(f, opt, e->u.literal.c);
+		break;
+
+	case AST_ENDPOINT_CODEPOINT:
+		fprintf(f, "U+%lX", (unsigned long) e->u.codepoint.u);
+		break; 
+
+	default:
+		assert(!"unreached");
+		break;
 	}
 }
 
@@ -47,41 +69,29 @@ pp_iter(FILE *f, const struct fsm_options *opt,
 		fprintf(f, "\tn%p -> n%p;\n", parent, (void *) n);
 	}
 
-	switch (n->t) {
+	switch (n->type) {
 	case AST_EXPR_EMPTY:
 		fprintf(f, "\tn%p [ label = <EMPTY> ];\n", (void *) n);
 		break;
 
 	case AST_EXPR_CONCAT:
-		fprintf(f, "\tn%p [ label = <CONCAT> ];\n", (void *) n);
-		pp_iter(f, opt, n, n->u.concat.l);
-		pp_iter(f, opt, n, n->u.concat.r);
-		break;
-
-	case AST_EXPR_CONCAT_N:
 	{
 		size_t i;
 		fprintf(f, "\tn%p [ label = <CONCAT|%lu> ];\n",
-		    (void *) n, n->u.concat_n.count);
-		for (i = 0; i < n->u.concat_n.count; i++) {
-			pp_iter(f, opt, n, n->u.concat_n.n[i]);
+		    (void *) n, n->u.concat.count);
+		for (i = 0; i < n->u.concat.count; i++) {
+			pp_iter(f, opt, n, n->u.concat.n[i]);
 		}
 		break;
 	}
 
 	case AST_EXPR_ALT:
-		fprintf(f, "\tn%p [ label = <ALT> ];\n", (void *) n);
-		pp_iter(f, opt, n, n->u.alt.l);
-		pp_iter(f, opt, n, n->u.alt.r);
-		break;
-
-	case AST_EXPR_ALT_N:
 	{
 		size_t i;
 		fprintf(f, "\tn%p [ label = <ALT|%lu> ];\n",
-		    (void *) n, n->u.alt_n.count);
-		for (i = 0; i < n->u.alt_n.count; i++) {
-			pp_iter(f, opt, n, n->u.alt_n.n[i]);
+		    (void *) n, n->u.alt.count);
+		for (i = 0; i < n->u.alt.count; i++) {
+			pp_iter(f, opt, n, n->u.alt.n[i]);
 		}
 		break;
 	}
@@ -92,22 +102,22 @@ pp_iter(FILE *f, const struct fsm_options *opt,
 		fprintf(f, "> ];\n");
 		break;
 
+	case AST_EXPR_CODEPOINT:
+		fprintf(f, "\tn%p [ label = <CODEPOINT|U+%lX> ];\n", (void *) n,
+			(unsigned long) n->u.codepoint.u);
+		break; 
+
 	case AST_EXPR_ANY:
 		fprintf(f, "\tn%p [ label = <ANY> ];\n", (void *) n);
 		break;
 
-	case AST_EXPR_REPEATED:
-		fprintf(f, "\tn%p [ label = <REPEATED|&#x7b;", (void *) n);
-		fprintf_count(f, n->u.repeated.low);
+	case AST_EXPR_REPEAT:
+		fprintf(f, "\tn%p [ label = <REPEAT|&#x7b;", (void *) n);
+		fprintf_count(f, n->u.repeat.min);
 		fprintf(f, ", ");
-		fprintf_count(f, n->u.repeated.high);
+		fprintf_count(f, n->u.repeat.max);
 		fprintf(f, "&#x7d;> ];\n");
-		pp_iter(f, opt, n, n->u.repeated.e);
-		break;
-
-	case AST_EXPR_CHAR_CLASS:
-		fprintf(f, "\tn%p [ label = <CHAR_CLASS> ];\n", (void *) n);
-		cc_pp_iter(f, opt, n, n->u.char_class.cca);
+		pp_iter(f, opt, n, n->u.repeat.e);
 		break;
 
 	case AST_EXPR_GROUP:
@@ -117,29 +127,46 @@ pp_iter(FILE *f, const struct fsm_options *opt,
 		break;
 
 	case AST_EXPR_ANCHOR:
-		assert(n->u.anchor.t == RE_AST_ANCHOR_START ||
-		    n->u.anchor.t == RE_AST_ANCHOR_END);
+		assert(n->u.anchor.type == AST_ANCHOR_START || n->u.anchor.type == AST_ANCHOR_END);
 		fprintf(f, "\tn%p [ label = <ANCHOR|%c> ];\n",
 		    (void *) n,
-		    n->u.anchor.t == RE_AST_ANCHOR_START ? '^' : '$');
+		    n->u.anchor.type == AST_ANCHOR_START ? '^' : '$');
 		break;
 
-	case AST_EXPR_FLAGS:
-		fprintf(f, "\tn%p [ label = <{FLAGS|{+", (void *) n);
-		re_flags_print(f, n->u.flags.pos);
-		fprintf(f, "|-");
-		re_flags_print(f, n->u.flags.neg);
+	case AST_EXPR_SUBTRACT:
+		fprintf(f, "\tn%p [ label = <{SUBTRACT|{a|b}}> ];\n", (void *) n);
+		pp_iter(f, opt, n, n->u.subtract.a);
+		pp_iter(f, opt, n, n->u.subtract.b);
+		break;
+
+	case AST_EXPR_RANGE:
+		fprintf(f, "\tn%p [ label = <RANGE|", (void *) n);
+		print_endpoint(f, opt, &n->u.range.from);
+		fprintf(f, " &ndash; ");
+		print_endpoint(f, opt, &n->u.range.to);
 		fprintf(f, "> ];\n");
 		break;
 
+	case AST_EXPR_FLAGS:
+		fprintf(f, "\tn%p [ label = <FLAGS|{+", (void *) n);
+		re_flags_print(f, n->u.flags.pos);
+		fprintf(f, "}|{-");
+		re_flags_print(f, n->u.flags.neg);
+		fprintf(f, "}> ];\n");
+		break;
+
+	case AST_EXPR_TOMBSTONE:
+		fprintf(f, "\tn%p [ label = <RIP> ];\n", (void *) n);
+		break;
+
 	default:
-		assert(0);
+		assert(!"unreached");
 	}
 }
 
 void
-re_ast_print_dot(FILE *f, const struct fsm_options *opt,
-	const struct ast_re *ast)
+ast_print_dot(FILE *f, const struct fsm_options *opt,
+	const struct ast *ast)
 {
 	assert(f != NULL);
 	assert(opt != NULL);
@@ -155,94 +182,5 @@ re_ast_print_dot(FILE *f, const struct fsm_options *opt,
 	pp_iter(f, opt, NULL, ast->expr);
 
 	fprintf(f, "}\n");
-}
-
-static void
-re_flags_print(FILE *f, enum re_flags fl)
-{
-	const char *sep = "";
-	if (fl & RE_ICASE) { fprintf(f, "%si", sep); sep = " "; }
-	if (fl & RE_TEXT) { fprintf(f, "%sg", sep); sep = " "; }
-	if (fl & RE_MULTI) { fprintf(f, "%sm", sep); sep = " "; }
-	if (fl & RE_REVERSE) { fprintf(f, "%sr", sep); sep = " "; }
-	if (fl & RE_SINGLE) { fprintf(f, "%ss", sep); sep = " "; }
-	if (fl & RE_ZONE) { fprintf(f, "%sz", sep); sep = " "; }
-}
-
-static void
-print_range_endpoint(FILE *f, const struct fsm_options *opt,
-	const struct ast_range_endpoint *r)
-{
-	switch (r->t) {
-	case AST_RANGE_ENDPOINT_LITERAL:
-		dot_escputc_html(f, opt, r->u.literal.c);
-		break;
-
-	default:
-		assert(0);
-		break;
-	}
-}
-
-static void
-cc_pp_iter(FILE *f, const struct fsm_options *opt,
-	const void *parent, struct re_char_class_ast *n)
-{
-	assert(f != NULL);
-	assert(opt != NULL);
-	assert(n != NULL);
-
-	if (parent != NULL) {
-		fprintf(f, "\tn%p -> n%p;\n", parent, (void *) n);
-	}
-
-	fprintf(f, "\tn%p [ style = \"filled\", fillcolor = \"#eeeeee\" ];\n", (void *) n);
-
-	switch (n->t) {
-	case RE_CHAR_CLASS_AST_CONCAT:
-		fprintf(f, "\tn%p [ label = <CLASS-CONCAT> ];\n", (void *) n);
-		cc_pp_iter(f, opt, n, n->u.concat.l);
-		cc_pp_iter(f, opt, n, n->u.concat.r);
-		break;
-
-	case RE_CHAR_CLASS_AST_LITERAL:
-		fprintf(f, "\tn%p [ label = <CLASS-LITERAL|", (void *) n);
-		dot_escputc_html(f, opt, n->u.literal.c);
-		fprintf(f, "> ];\n");
-		break;
-
-	case RE_CHAR_CLASS_AST_RANGE:
-		fprintf(f, "\tn%p [ label = <CLASS-RANGE|", (void *) n);
-		print_range_endpoint(f, opt, &n->u.range.from);
-		fprintf(f, " &ndash; ");
-		print_range_endpoint(f, opt, &n->u.range.to);
-		fprintf(f, "> ];\n");
-		break;
-
-	case RE_CHAR_CLASS_AST_NAMED:
-		fprintf(f, "\tn%p [ label = <CLASS-NAMED|(opaque)> ];\n", (void *) n);
-		break;
-
-	case RE_CHAR_CLASS_AST_FLAGS:
-		fprintf(f, "\tn%p [ label = <CLASS-FLAGS|", (void *) n);
-		if (n->u.flags.f & RE_CHAR_CLASS_FLAG_INVERTED) {
-			fprintf(f, "^");
-		}
-		if (n->u.flags.f & RE_CHAR_CLASS_FLAG_MINUS) {
-			fprintf(f, "-");
-		}
-		fprintf(f, "> ];\n");
-		break;
-
-	case RE_CHAR_CLASS_AST_SUBTRACT:
-		fprintf(f, "\tn%p [ label = <{CLASS-SUBTRACT|{ast|mask}}> ];\n", (void *) n);
-		cc_pp_iter(f, opt, n, n->u.subtract.ast);
-		cc_pp_iter(f, opt, n, n->u.subtract.mask);
-		break;
-
-	default:
-		fprintf(stderr, "(MATCH FAIL)\n");
-		assert(0);
-	}
 }
 

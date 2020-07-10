@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stdio.h>
 #include <ctype.h>
 
 #include <fsm/fsm.h>
@@ -17,10 +18,26 @@
 
 enum { POOL_BLOCK_SIZE = 256 };
 
+struct trie_state {
+	struct trie_state *children[256];
+	struct trie_state *fail;
+	fsm_state_t st;
+	unsigned int index;
+	unsigned int output:1;
+	unsigned int have_st:1;
+};
+
 struct trie_pool {
 	struct trie_pool *next;
 	struct trie_state *states;
 	size_t n;
+};
+
+struct trie_graph {
+	struct trie_state *root;
+	struct trie_pool *pool;
+	size_t nstates;
+	size_t depth;
 };
 
 static struct trie_state *
@@ -50,12 +67,12 @@ newstate(struct trie_graph *g)
 
 	memset(st->children,0,sizeof st->children);
 
-	st->fail   = NULL;
-	st->st     = NULL;
+	st->fail    = NULL;
+	st->have_st = 0;
 
-	st->index  = ++g->nstates;
+	st->index   = ++g->nstates;
 
-	st->output = 0;
+	st->output  = 0;
 
 	return st;
 }
@@ -64,6 +81,7 @@ static void
 cleanup_pool(struct trie_graph *g)
 {
 	struct trie_pool *p;
+
 	while (g->pool != NULL) {
 		p = g->pool;
 		g->pool = p->next;
@@ -76,10 +94,12 @@ cleanup_pool(struct trie_graph *g)
 void
 trie_free(struct trie_graph *g)
 {
-	if (g != NULL) {
-		cleanup_pool(g);
-		free(g);
+	if (g == NULL) {
+		return;
 	}
+
+	cleanup_pool(g);
+	free(g);
 }
 
 struct trie_graph *
@@ -108,8 +128,8 @@ trie_create(void)
 struct trie_graph *
 trie_add_word(struct trie_graph *g, const char *w, size_t n)
 {
-	size_t i;
 	struct trie_state *st;
+	size_t i;
 
 	assert(g != NULL);
 
@@ -117,7 +137,7 @@ trie_add_word(struct trie_graph *g, const char *w, size_t n)
 
 	assert(st != NULL);
 
-	for (i=0; i < n; i++) {
+	for (i = 0; i < n; i++) {
 		struct trie_state *nx;
 		int idx = (unsigned char)w[i];
 		nx = st->children[idx];
@@ -237,7 +257,8 @@ find_next_state(struct trie_state *s, int sym)
 	if (nx == NULL) {
 		assert(fail->fail == fail);
 
-		/* failure state is the root, which
+		/*
+		 * failure state is the root, which
 		 * has implicit edges back to itself
 		 */
 		return fail;
@@ -246,41 +267,48 @@ find_next_state(struct trie_state *s, int sym)
 	return nx;
 }
 
-static struct fsm_state *
-trie_to_fsm_state(struct trie_state *ts, struct fsm *fsm, struct fsm_state *single_end)
+static int
+trie_to_fsm_state(struct trie_state *ts, struct fsm *fsm,
+	int have_end, fsm_state_t single_end,
+	fsm_state_t *q)
 {
-	struct fsm_state *st;
+	fsm_state_t st;
 	int sym;
 
-	if (ts->output && single_end) {
-		return single_end;
+	assert(fsm != NULL);
+	assert(q != NULL);
+
+	if (ts->output && have_end) {
+		*q = single_end;
+		return 1;
 	}
 
-	if (ts->st != NULL) {
-		return ts->st;
+	if (ts->have_st) {
+		*q = ts->st;
+		return 1;
 	}
 
-	st = fsm_addstate(fsm);
-	if (st == NULL) {
-		return NULL;
+	/* TODO: bulk add states in advance */
+	if (!fsm_addstate(fsm, &st)) {
+		return 0;
 	}
 
 	ts->st = st;
+	ts->have_st = 1;
 
-	for (sym=0; sym < 256; sym++) {
+	for (sym = 0; sym < 256; sym++) {
 		struct trie_state *nx;
 
 		nx = find_next_state(ts,sym);
 		if (nx != NULL) {
-			struct fsm_state *dst;
+			fsm_state_t dst;
 
-			dst = trie_to_fsm_state(nx, fsm, single_end);
-			if (dst == NULL) {
-				return NULL;
+			if (!trie_to_fsm_state(nx, fsm, have_end, single_end, &dst)) {
+				return 0;
 			}
 
 			if (!fsm_addedge_literal(fsm, st, dst, sym)) {
-				return NULL;
+				return 0;
 			}
 		}
 	}
@@ -289,16 +317,20 @@ trie_to_fsm_state(struct trie_state *ts, struct fsm *fsm, struct fsm_state *sing
 		fsm_setend(fsm, st, 1);
 	}
 
-	return st;
+	*q = st;
+	return 1;
 }
 
 struct fsm *
-trie_to_fsm(struct fsm *fsm, struct trie_graph *g, struct fsm_state *end)
+trie_to_fsm(struct fsm *fsm, struct trie_graph *g, int have_end, fsm_state_t end)
 {
-	struct fsm_state *start;
+	fsm_state_t start;
 
-	start = trie_to_fsm_state(g->root, fsm, end);
-	fsm_setstart(fsm,start);
+	if (!trie_to_fsm_state(g->root, fsm, have_end, end, &start)) {
+		return NULL;
+	}
+
+	fsm_setstart(fsm, start);
 
 	return fsm;
 }
@@ -307,7 +339,8 @@ static void
 dump_state(struct trie_state *st, FILE *f, int indent, char* buf)
 {
 	int i;
-	for (i=0; i < 256; i++) {
+
+	for (i = 0; i < 256; i++) {
 		int sp;
 
 		if (st->children[i] != NULL) {
@@ -341,5 +374,4 @@ trie_dump(struct trie_graph *g, FILE *f)
 
 	dump_state(g->root,f,0, buf);
 }
-
 

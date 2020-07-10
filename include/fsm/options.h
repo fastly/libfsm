@@ -19,12 +19,6 @@ enum fsm_io {
 };
 
 struct fsm_options {
-	/* boolean: true indicates to go to extra lengths in order to produce
-	 * neater-looking FSMs for certian operations. This usually means finding
-	 * a state which can be re-used, at the cost of runtime.
-	 * Keep this false if you want performant operations for large FSM. */
-	unsigned int tidy:1;
-
 	/* boolean: true indicates to omit names for states in output */
 	unsigned int anonymous_states:1;
 
@@ -71,8 +65,8 @@ struct fsm_options {
 	void *endleaf_opaque;
 
 	/* TODO: explain */
-	void (*carryopaque)(const struct fsm_state **, size_t,
-		struct fsm *, struct fsm_state *);
+	void (*carryopaque)(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
+		struct fsm *dst_fsm, fsm_state_t dst_state);
 
 	/* custom allocation functions */
 	const struct fsm_alloc *alloc;

@@ -8,6 +8,9 @@ enum lx_pcre_token {
 	TOK_SEP,
 	TOK_CLOSECOUNT,
 	TOK_OPENCOUNT,
+	TOK_OPENGROUPINVCB,
+	TOK_OPENGROUPCB,
+	TOK_OPENGROUPINV,
 	TOK_CHAR,
 	TOK_RANGE,
 	TOK_INVERT,
@@ -22,7 +25,7 @@ enum lx_pcre_token {
 	TOK_NOESC,
 	TOK_HEX,
 	TOK_OCT,
-	TOK_NAMED__CHAR__CLASS,
+	TOK_NAMED__CLASS,
 	TOK_CONTROL,
 	TOK_ESC,
 	TOK_ALT,
@@ -42,12 +45,13 @@ enum lx_pcre_token {
 
 /*
  * .byte is 0-based.
- * .line and .col are 1-based; 0 means unknown.
+ * .line, .col, and .saved_col are 1-based; 0 means unknown.
  */
 struct lx_pos {
 	unsigned byte;
 	unsigned line;
 	unsigned col;
+	unsigned saved_col;
 };
 
 struct lx_pcre_lx {

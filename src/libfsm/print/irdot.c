@@ -26,7 +26,7 @@
 #include "ir.h"
 
 static unsigned int
-indexof(const struct ir *ir, const struct ir_state *cs)
+ir_indexof(const struct ir *ir, const struct ir_state *cs)
 {
 	assert(ir != NULL);
 	assert(cs != NULL);
@@ -85,6 +85,8 @@ print_errorrows(FILE *f, const struct fsm_options *opt,
 	assert(error != NULL);
 	assert(error->ranges != NULL);
 
+	(void)ir; /* unused */
+
 	for (k = 0; k < error->n; k++) {
 		fprintf(f, "\t\t  <TR>");
 
@@ -122,6 +124,8 @@ print_grouprows(FILE *f, const struct fsm_options *opt,
 	assert(opt != NULL);
 	assert(ir != NULL);
 	assert(groups != NULL);
+
+	(void)ir; /* unused */
 
 	for (j = 0; j < n; j++) {
 		assert(groups[j].ranges != NULL);
@@ -166,6 +170,8 @@ print_grouplinks(FILE *f, const struct ir *ir, unsigned self,
 	assert(ir != NULL);
 	assert(groups != NULL);
 
+	(void)ir; /* unused */
+
 	for (j = 0; j < n; j++) {
 		if (groups[j].to == self) {
 			/* no edge drawn */
@@ -187,13 +193,13 @@ print_cs(FILE *f, const struct fsm_options *opt,
 	assert(cs != NULL);
 
 	if (cs->isend) {
-		fprintf(f, "\tcs%u [ peripheries = 2 ];\n", indexof(ir, cs));
+		fprintf(f, "\tcs%u [ peripheries = 2 ];\n", ir_indexof(ir, cs));
 	}
 
-	fprintf(f, "\tcs%u [ label =\n", indexof(ir, cs));
+	fprintf(f, "\tcs%u [ label =\n", ir_indexof(ir, cs));
 	fprintf(f, "\t\t<<TABLE BORDER='0' CELLPADDING='2' CELLSPACING='0'>\n");
 	fprintf(f, "\t\t  <TR><TD COLSPAN='2' ALIGN='LEFT'>S%u</TD><TD ALIGN='LEFT'>%s</TD></TR>\n",
-		indexof(ir, cs), strategy_name(cs->strategy));
+		ir_indexof(ir, cs), strategy_name(cs->strategy));
 
 	if (cs->example != NULL) {
 		fprintf(f, "\t\t  <TR><TD COLSPAN='2' ALIGN='LEFT'>example</TD><TD ALIGN='LEFT'>");
@@ -209,31 +215,31 @@ print_cs(FILE *f, const struct fsm_options *opt,
 
 	case IR_SAME:
 		fprintf(f, "\t\t  <TR><TD COLSPAN='2' ALIGN='LEFT'>to</TD><TD ALIGN='LEFT'>");
-		print_state(f, cs->u.same.to, indexof(ir, cs));
+		print_state(f, cs->u.same.to, ir_indexof(ir, cs));
 		fprintf(f, "</TD></TR>\n");
 		break;
 
 	case IR_COMPLETE:
-		print_grouprows(f, opt, ir, indexof(ir, cs), cs->u.complete.groups, cs->u.complete.n);
+		print_grouprows(f, opt, ir, ir_indexof(ir, cs), cs->u.complete.groups, cs->u.complete.n);
 		break;
 
 	case IR_PARTIAL:
-		print_grouprows(f, opt, ir, indexof(ir, cs), cs->u.partial.groups, cs->u.partial.n);
+		print_grouprows(f, opt, ir, ir_indexof(ir, cs), cs->u.partial.groups, cs->u.partial.n);
 		break;
 
 	case IR_DOMINANT:
 		fprintf(f, "\t\t  <TR><TD COLSPAN='2' ALIGN='LEFT'>mode</TD><TD ALIGN='LEFT' PORT='mode'>");
-		print_state(f, cs->u.dominant.mode, indexof(ir, cs));
+		print_state(f, cs->u.dominant.mode, ir_indexof(ir, cs));
 		fprintf(f, "</TD></TR>\n");
-		print_grouprows(f, opt, ir, indexof(ir, cs), cs->u.dominant.groups, cs->u.dominant.n);
+		print_grouprows(f, opt, ir, ir_indexof(ir, cs), cs->u.dominant.groups, cs->u.dominant.n);
 		break;
 
 	case IR_ERROR:
 		fprintf(f, "\t\t  <TR><TD COLSPAN='2' ALIGN='LEFT'>mode</TD><TD ALIGN='LEFT' PORT='mode'>");
-		print_state(f, cs->u.error.mode, indexof(ir, cs));
+		print_state(f, cs->u.error.mode, ir_indexof(ir, cs));
 		fprintf(f, "</TD></TR>\n");
 		print_errorrows(f, opt, ir, &cs->u.error.error);
-		print_grouprows(f, opt, ir, indexof(ir, cs), cs->u.error.groups, cs->u.error.n);
+		print_grouprows(f, opt, ir, ir_indexof(ir, cs), cs->u.error.groups, cs->u.error.n);
 		break;
 
 	case IR_TABLE:
@@ -251,40 +257,40 @@ print_cs(FILE *f, const struct fsm_options *opt,
 		break;
 
 	case IR_SAME:
-		if (cs->u.same.to == indexof(ir, cs)) {
+		if (cs->u.same.to == ir_indexof(ir, cs)) {
 			/* no edge drawn */
 		} else {
 			fprintf(f, "\tcs%u -> cs%u;\n",
-				indexof(ir, cs), cs->u.same.to);
+				ir_indexof(ir, cs), cs->u.same.to);
 		}
 		break;
 
 	case IR_COMPLETE:
-		print_grouplinks(f, ir, indexof(ir, cs), cs->u.complete.groups, cs->u.complete.n);
+		print_grouplinks(f, ir, ir_indexof(ir, cs), cs->u.complete.groups, cs->u.complete.n);
 		break;
 
 	case IR_PARTIAL:
-		print_grouplinks(f, ir, indexof(ir, cs), cs->u.partial.groups, cs->u.partial.n);
+		print_grouplinks(f, ir, ir_indexof(ir, cs), cs->u.partial.groups, cs->u.partial.n);
 		break;
 
 	case IR_DOMINANT:
-		if (cs->u.dominant.mode == indexof(ir, cs)) {
+		if (cs->u.dominant.mode == ir_indexof(ir, cs)) {
 			/* no edge drawn */
 		} else {
 			fprintf(f, "\tcs%u:mode -> cs%u;\n",
-				indexof(ir, cs), cs->u.dominant.mode);
+				ir_indexof(ir, cs), cs->u.dominant.mode);
 		}
-		print_grouplinks(f, ir, indexof(ir, cs), cs->u.dominant.groups, cs->u.dominant.n);
+		print_grouplinks(f, ir, ir_indexof(ir, cs), cs->u.dominant.groups, cs->u.dominant.n);
 		break;
 
 	case IR_ERROR:
-		if (cs->u.error.mode == indexof(ir, cs)) {
+		if (cs->u.error.mode == ir_indexof(ir, cs)) {
 			/* no edge drawn */
 		} else {
 			fprintf(f, "\tcs%u:mode -> cs%u;\n",
-				indexof(ir, cs), cs->u.error.mode);
+				ir_indexof(ir, cs), cs->u.error.mode);
 		}
-		print_grouplinks(f, ir, indexof(ir, cs), cs->u.error.groups, cs->u.error.n);
+		print_grouplinks(f, ir, ir_indexof(ir, cs), cs->u.error.groups, cs->u.error.n);
 		break;
 
 	case IR_TABLE:

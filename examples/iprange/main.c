@@ -421,24 +421,37 @@ important(unsigned n)
 }
 
 static void
-carryopaque(const struct fsm_state **set, size_t n,
-	struct fsm *fsm, struct fsm_state *st)
+carryopaque(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
+	struct fsm *dst_fsm, struct fsm_state *dst_state)
 {
 	void *o = NULL;
 	size_t i;
 
+	assert(src_fsm != NULL);
+	assert(src_set != NULL);
+	assert(n > 0);
+	assert(dst_fsm != NULL);
+	assert(fsm_isend(dst_fsm, dst_state));
+	assert(fsm_getopaque(dst_fsm, dst_state) == NULL);
+
 	for (i = 0; i < n; i++) {
-		if (!fsm_isend(fsm, set[i])) {
+		/*
+		 * The opaque data is attached to end states only, so we skip
+		 * non-end states here.
+		 */
+		if (!fsm_isend(src_fsm, src_set[i])) {
 			continue;
 		}
+
+		assert(fsm_getopaque(src_fsm, src_set[i]) != NULL);
 
 		if (o == NULL) {
-			o = fsm_getopaque(fsm, set[i]);
-			fsm_setopaque(fsm, st, o);
+			o = fsm_getopaque(src_fsm, src_set[i]);
+			fsm_setopaque(dst_fsm, dst_state, o);
 			continue;
 		}
 
-		assert(o == fsm_getopaque(fsm, set[i]));
+		assert(o == fsm_getopaque(src_fsm, src_set[i]));
 	}
 }
 
@@ -641,7 +654,7 @@ main(int argc, char **argv)
 
 	struct record *r;
 	RB_FOREACH(r, recmap, &recmap) {
-		struct fsm_state *start;
+		fsm_state_t start;
 
 		if (fsm_minimise(r->fsm) == 0) {
 			perror("fsm_minimise");
@@ -650,8 +663,7 @@ main(int argc, char **argv)
 
 		fsm_setendopaque(r->fsm, r);
 
-		start = fsm_getstart(r->fsm);
-		assert(start != NULL);
+		(void) fsm_getstart(r->fsm, &start);
 
 		fsm = fsm_merge(fsm, r->fsm);
 		if (fsm == NULL) {
@@ -687,12 +699,10 @@ main(int argc, char **argv)
 	{
 		opt.carryopaque = carryopaque;
 
-		struct fsm_determinise_cache *cache = NULL;
-		if (fsm_determinise_cache(fsm, &cache) == 0) {
-			perror("fsm_determinise_cache");
+		if (!fsm_determinise(fsm) == 0) {
+			perror("fsm_determinise");
 			exit(-1);
 		}
-		fsm_determinise_freecache(fsm, cache);
 
 		opt.carryopaque = NULL;
 	}

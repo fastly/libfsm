@@ -7,35 +7,39 @@
 #include <assert.h>
 #include <stddef.h>
 
-#include <adt/set.h>
-#include <adt/stateset.h>
-#include <adt/edgeset.h>
-
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
 #include <fsm/walk.h>
 #include <fsm/options.h>
+
+#include <adt/set.h>
+#include <adt/stateset.h>
+#include <adt/edgeset.h>
 
 #include "internal.h"
 
 int
 fsm_reverse(struct fsm *fsm)
 {
-	struct fsm *new;
-	struct fsm_state *end;
 	struct state_set *endset;
+	fsm_state_t prevstart;
+	fsm_state_t start, end;
+	int hasepsilons;
+	struct edge_set **edges;
+	struct state_set **epsilons;
 
 	assert(fsm != NULL);
 	assert(fsm->opt != NULL);
 
-	new = fsm_new(fsm->opt);
-	if (new == NULL) {
-		return 0;
-	}
+	if (fsm->endcount == 0 || !fsm_getstart(fsm, &prevstart)) {
+		struct fsm *new;
 
-	if (fsm->endcount == 0) {
-		new->start = fsm_addstate(new);
-		if (new->start == NULL) {
+		new = fsm_new(fsm->opt);
+		if (new == NULL) {
+			return 0;
+		}
+
+		if (!fsm_addstate(new, &new->start)) {
 			fsm_free(new);
 			return 0;
 		}
@@ -49,7 +53,7 @@ fsm_reverse(struct fsm *fsm)
 	 * The new end state is the previous start state. Because there is (at most)
 	 * one start state, the new FSM will have at most one end state.
 	 */
-	end = NULL;
+	end = prevstart;
 
 	/*
 	 * The set of the previous end states.
@@ -58,175 +62,229 @@ fsm_reverse(struct fsm *fsm)
 	 * This isn't anything to do with the reversing; it's meaningful
 	 * only to the caller.
 	 */
-	endset = state_set_create(fsm->opt->alloc);
-
-	/*
-	 * Create states corresponding to the original FSM's states.
-	 * These are created in the same order, due to fsm_addstate()
-	 * placing them at fsm->tail.
-	 */
-	/* TODO: possibly centralise as a state-copying function */
 	{
-		struct fsm_state *s;
+		fsm_state_t i;
 
-		for (s = fsm->sl; s != NULL; s = s->next) {
-			struct fsm_state *p;
+		endset = NULL;
 
-			p = fsm_addstate(new);
-			if (p == NULL) {
-				fsm_free(new);
-				return 0;
-			}
-
-			s->tmp.equiv = p;
-
-			if (s == fsm->start) {
-				end = p;
-				fsm_setend(new, end, 1);
-			}
-
-			if (fsm_isend(fsm, s)) {
-				if (!state_set_add(endset, s)) {
-					state_set_free(endset);
-					fsm_free(new);
-					return 0;
-				}
-
-				if (fsm->endcount == 1) {
-					assert(new->start == NULL);
-					new->start = p;
-				}
-			}
-		}
-	}
-
-	fsm_carryopaque(fsm, endset, new, end);
-
-	/* Create reversed edges */
-	{
-		struct fsm_state *s;
-
-		for (s = fsm->sl; s != NULL; s = s->next) {
-			struct fsm_state *to;
-			struct fsm_state *se;
-			struct edge_iter it;
-			struct fsm_edge *e;
-
-			to = s->tmp.equiv;
-
-			assert(to != NULL);
-
-			{
-				struct state_iter jt;
-
-				for (se = state_set_first(s->epsilons, &jt); se != NULL; se = state_set_next(&jt)) {
-					assert(se->tmp.equiv != NULL);
-
-					if (!fsm_addedge_epsilon(new, se->tmp.equiv, to)) {
-						state_set_free(endset);
-						fsm_free(new);
-						return 0;
-					}
-				}
-			}
-			for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
-				struct state_iter jt;
-
-				for (se = state_set_first(e->sl, &jt); se != NULL; se = state_set_next(&jt)) {
-					assert(se->tmp.equiv != NULL);
-
-					if (!fsm_addedge_literal(new, se->tmp.equiv, to, e->symbol)) {
-						state_set_free(endset);
-						fsm_free(new);
-						return 0;
-					}
-				}
-			}
-		}
-	}
-
-	assert(fsm->endcount != 0);
-
-	if (fsm->endcount == 1) {
-		/* already handled above */
-		assert(new->start != NULL);
-	}
-
-	/*
-	 * Mark the new start state. If there's only one state, we can indicate it
-	 * directly. Otherwise we will be starting from a group of states, linked
-	 * together by epsilon transitions.
-	 */
-	if (fsm->endcount > 1) {
-		struct fsm_state *s;
-		struct state_iter it;
-
-		/*
-		 * The typical case here is to create a new start state, and to
-		 * link it to end states by epsilon transitions.
-		 *
-		 * An optimisation: if we found an end state with no incoming
-		 * edges, that state is nominated as a new start state. This is
-		 * equivalent to adding a new start state, and linking out from
-		 * that, except it does not need to introduce a new state.
-		 * Otherwise, we need to create a new start state as per usual.
-		 *
-		 * In either case, the start is linked to the other new start
-		 * states by epsilons.
-		 *
-		 * It is important to use a start state with no incoming edges as
-		 * this prevents accidentally transitioning to another route.
-		 *
-		 * This optimisation can be expensive to run, so it's optionally
-		 * disabled by the opt->tidy flag.
-		 */
-
-		if (0 || !fsm->opt->tidy) {
-			s = NULL;
-		} else {
-			for (s = state_set_first(endset, &it); s != NULL; s = state_set_next(&it)) {
-				if (!fsm_hasincoming(fsm, s)) {
-					break;
-				}
-			}
-		}
-
-		if (s != NULL) {
-			new->start = s->tmp.equiv;
-			assert(new->start != NULL);
-		} else {
-			new->start = fsm_addstate(new);
-			if (new->start == NULL) {
-				state_set_free(endset);
-				fsm_free(new);
-				return 0;
-			}
-		}
-
-		for (s = state_set_first(endset, &it); s != NULL; s = state_set_next(&it)) {
-			struct fsm_state *state;
-
-			state = s->tmp.equiv;
-			assert(state != NULL);
-
-			if (state == new->start) {
+		for (i = 0; i < fsm->statecount; i++) {
+			if (!fsm_isend(fsm, i)) {
 				continue;
 			}
 
-			if (!fsm_addedge_epsilon(new, new->start, state)) {
+			if (!state_set_add(&endset, fsm->opt->alloc, i)) {
 				state_set_free(endset);
-				fsm_free(new);
 				return 0;
 			}
+		}
+
+		assert(state_set_count(endset) == fsm->endcount);
+	}
+
+	/*
+	 * The new start state is either the single previous end state, or
+	 * if the endset contains multiple end states then the new start
+	 * state is a specially-created state.
+	 */
+	{
+		if (fsm->endcount == 1) {
+			start = state_set_only(endset);
+		} else {
+			if (!fsm_addstate(fsm, &start)) {
+				state_set_free(endset);
+				return 0;
+			}
+		}
+
+		fsm_setstart(fsm, start);
+	}
+
+	edges = f_malloc(fsm->opt->alloc, sizeof *edges * fsm->statecount);
+	if (edges == NULL) {
+		state_set_free(endset);
+		return 0;
+	}
+
+	epsilons = f_malloc(fsm->opt->alloc, sizeof *epsilons * fsm->statecount);
+	if (edges == NULL) {
+		state_set_free(endset);
+		f_free(fsm->opt->alloc, edges);
+		return 0;
+	}
+
+	/*
+	 * These arrays need to be initialised because we're populating the
+	 * destination states here (that is, we set elements out of order).
+	 */
+	{
+		fsm_state_t i;
+
+		for (i = 0; i < fsm->statecount; i++) {
+			epsilons[i] = NULL;
+			edges[i]    = NULL;
+		}
+	}
+
+	hasepsilons = 0;
+
+	/* Create reversed edges */
+	{
+		fsm_state_t i;
+
+		for (i = 0; i < fsm->statecount; i++) {
+			struct edge_iter it;
+			struct fsm_edge e;
+
+			{
+				struct state_iter jt;
+				fsm_state_t se;
+
+				/* TODO: eventually to be a predicate bit cached for the whole fsm */
+				if (fsm->states[i].epsilons != NULL) {
+					hasepsilons = 1;
+				}
+
+				for (state_set_reset(fsm->states[i].epsilons, &jt); state_set_next(&jt, &se); ) {
+					if (!state_set_add(&epsilons[se], fsm->opt->alloc, i)) {
+						goto error1;
+					}
+				}
+			}
+			for (edge_set_reset(fsm->states[i].edges, &it); edge_set_next(&it, &e); ) {
+				assert(e.state < fsm->statecount);
+
+				if (!edge_set_add(&edges[e.state], fsm->opt->alloc, e.symbol, i)) {
+					return 0;
+				}
+			}
+		}
+	}
+
+	/*
+	 * Mark the new start state. If there's only one state, we can
+	 * indicate it directly (done earlier). Otherwise we will be
+	 * starting from a group of states, linked together by epsilon
+	 * transitions (or an epsilon closure).
+	 *
+	 * We avoid introducing epsilon transitions to an FSM where
+	 * there potentially were none before. That is, a Glushkov NFA
+	 * will not be converted to a Thompson NFA.
+	 *
+	 * Conceptually this is equivalent to hooking the start state
+	 * up with epsilons, then taking the epsilon closure of that
+	 * state, and all outgoing transitions from that closure are
+	 * copied over to the start state.
+	 *
+	 * If the FSM had epsilons in the first place, then there's no
+	 * need to avoid introducing them here.
+	 */
+	if (fsm->endcount == 1) {
+		/* we nominated the single previous end state as the new start */
+	} else if (hasepsilons) {
+		struct state_iter it;
+		fsm_state_t s;
+
+		for (state_set_reset(endset, &it); state_set_next(&it, &s); ) {
+			if (s == start) {
+				continue;
+			}
+
+			if (!state_set_add(&epsilons[start], fsm->opt->alloc, s)) {
+				goto error1;
+			}
+		}
+	} else {
+		struct state_iter it;
+		fsm_state_t s;
+
+		for (state_set_reset(endset, &it); state_set_next(&it, &s); ) {
+			if (s == start) {
+				continue;
+			}
+
+			if (edges[s] == NULL) {
+				continue;
+			}
+
+			if (!edge_set_copy(&edges[start], fsm->opt->alloc, edges[s])) {
+				goto error;
+			}
+		}
+	}
+
+	{
+		struct state_iter it;
+		fsm_state_t s;
+
+		if (!state_set_contains(endset, end)) {
+			assert(!fsm_isend(fsm, end));
+
+			fsm_setend(fsm, end, 1);
+
+			/* TODO: if we keep a fsm-wide endset, we can use it verbatim here */
+			fsm_carryopaque(fsm, endset, fsm, end);
+		}
+
+		for (state_set_reset(endset, &it); state_set_next(&it, &s); ) {
+			if (s == end) {
+				continue;
+			}
+
+			fsm_setend(fsm, s, 0);
+			fsm->states[s].opaque = NULL;
+		}
+	}
+
+	/*
+	 * If the epsilon closure of a newly-created start state includes an
+	 * accepting state, then the start state itself must be marked accepting.
+	 */
+	if (state_set_count(endset) > 1 && !hasepsilons && state_set_has(fsm, endset, fsm_isend)) {
+		assert(!fsm_isend(fsm, start));
+		fsm_setend(fsm, start, 1);
+		fsm_carryopaque(fsm, endset, fsm, start);
+	}
+
+	{
+		fsm_state_t i;
+
+		for (i = 0; i < fsm->statecount; i++) {
+			state_set_free(fsm->states[i].epsilons);
+			edge_set_free(fsm->states[i].edges);
+
+			fsm->states[i].epsilons = epsilons[i];
+			fsm->states[i].edges = edges[i];
 		}
 	}
 
 	state_set_free(endset);
-	
-	fsm_clear_tmp(fsm);
 
-	fsm_move(fsm, new);
+	f_free(fsm->opt->alloc, epsilons);
+	f_free(fsm->opt->alloc, edges);
 
 	return 1;
+
+error1:
+
+	{
+		fsm_state_t i;
+
+		for (i = 0; i < fsm->statecount; i++) {
+			state_set_free(fsm->states[i].epsilons);
+			edge_set_free(fsm->states[i].edges);
+
+			fsm->states[i].epsilons = epsilons[i];
+			fsm->states[i].edges = edges[i];
+		}
+	}
+
+error:
+
+	state_set_free(endset);
+
+	f_free(fsm->opt->alloc, epsilons);
+	f_free(fsm->opt->alloc, edges);
+
+	return 0;
 }
 

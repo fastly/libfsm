@@ -23,134 +23,137 @@
 #include <fsm/print.h>
 #include <fsm/options.h>
 
-static unsigned int
-indexof(const struct fsm *fsm, const struct fsm_state *state)
-{
-	struct fsm_state *s;
-	unsigned int i;
-
-	assert(fsm != NULL);
-	assert(state != NULL);
-
-	for (s = fsm->sl, i = 0; s != NULL; s = s->next, i++) {
-		if (s == state) {
-			return i;
-		}
-	}
-
-	assert(!"unreached");
-	return 0;
-}
-
 /* TODO: centralise */
-static const struct fsm_state *
-findany(const struct fsm_state *state)
+static int
+findany(const struct fsm *fsm, fsm_state_t state, fsm_state_t *a)
 {
-	struct fsm_state *f, *s;
-	struct fsm_edge *e;
+	struct fsm_edge e;
 	struct edge_iter it;
-	struct state_iter jt;
+	fsm_state_t f;
 	struct bm bm;
 
-	assert(state != NULL);
+	assert(fsm != NULL);
+	assert(state < fsm->statecount);
+
+	/*
+	 * This approach is a little unsatisfying because it will only identify
+	 * situations with one single "any" edge between states. I'd much prefer
+	 * to be able to emit "any" edges for situations like:
+	 *
+	 *  1 -> 2 'x';
+	 *  1 -> 3;
+	 *
+	 * where a given state also has an unrelated edge transitioning elsewhere.
+	 * The current implementation conservatively bails out on that situation
+	 * (because f != e.state), and will emit each edge separately.
+	 */
 
 	bm_clear(&bm);
 
-	e = edge_set_first(state->edges, &it);
-	if (e == NULL) {
-		return NULL;
+	edge_set_reset(fsm->states[state].edges, &it);
+	if (!edge_set_next(&it, &e)) {
+		return 0;
 	}
 
 	/* if the first edge is not the first character,
 	 * then we can't possibly have an "any" transition */
-	if (e->symbol != '\0') {
-		return NULL;
+	if (e.symbol != '\0') {
+		return 0;
 	}
 
-	f = state_set_first(e->sl, &jt);
-	if (f == NULL) {
-		return NULL;
-	}
+	f = e.state;
 
-	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
-		if (state_set_count(e->sl) != 1) {
-			return NULL;
+	for (edge_set_reset(fsm->states[state].edges, &it); edge_set_next(&it, &e); ) {
+		if (f != e.state) {
+			return 0;
 		}
 
-		s = state_set_only(e->sl);
-		if (f != s) {
-			return NULL;
+		/* we reject duplicate edges, even though they're to the same state */
+		if (bm_get(&bm, e.symbol)) {
+			return 0;
 		}
 
-		bm_set(&bm, e->symbol);
+		bm_set(&bm, e.symbol);
 	}
 
 	if (bm_count(&bm) != FSM_SIGMA_COUNT) {
-		return NULL;
+		return 0;
 	}
 
-	assert(f != NULL);
+	assert(f < fsm->statecount);
 
-	return f;
+	*a = f;
+	return 1;
 }
 
 void
 fsm_print_fsm(FILE *f, const struct fsm *fsm)
 {
-	struct fsm_state *s, *start;
-	int end;
+	fsm_state_t s, start;
+	size_t end;
 
 	assert(f != NULL);
 	assert(fsm != NULL);
 
-	for (s = fsm->sl; s != NULL; s = s->next) {
-		struct fsm_edge *e;
+	if (!fsm->opt->anonymous_states) {
+		/*
+		 * States are output in order here so as to force ordering when
+		 * parsing the .fsm format and creating new states. This ensures
+		 * that the new states (numbered in order) match the numbering here.
+		 */
+		for (s = 0; s < fsm->statecount; s++) {
+			fprintf(f, "%u;%s", s,
+				s + 1 < fsm->statecount ? " " : "\n");
+		}
+
+		fprintf(f, "\n");
+	}
+
+	for (s = 0; s < fsm->statecount; s++) {
+		struct fsm_edge e;
 		struct edge_iter it;
 
 		{
-			struct fsm_state *st;
 			struct state_iter jt;
+			fsm_state_t st;
 
-			for (st = state_set_first(s->epsilons, &jt); st != NULL; st = state_set_next(&jt)) {
-				assert(st != NULL);
-
-				fprintf(f, "%-2u -> %2u;\n", indexof(fsm, s), indexof(fsm, st));
+			for (state_set_reset(fsm->states[s].epsilons, &jt); state_set_next(&jt, &st); ) {
+				fprintf(f, "%-2u -> %2u;\n", s, st);
 			}
 		}
 
 		{
-			const struct fsm_state *a;
+			fsm_state_t a;
 
-			a = findany(s);
-			if (a != NULL) {
-				fprintf(f, "%-2u -> %2u ?;\n", indexof(fsm, s), indexof(fsm, a));
+			if (findany(fsm, s, &a)) {
+				fprintf(f, "%-2u -> %2u ?;\n", s, a);
 				continue;
 			}
 		}
 
-		for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
-			struct fsm_state *st;
-			struct state_iter jt;
+		assert(s < fsm->statecount);
+		for (edge_set_reset(fsm->states[s].edges, &it); edge_set_next(&it, &e); ) {
+			assert(e.state < fsm->statecount);
 
-			for (st = state_set_first(e->sl, &jt); st != NULL; st = state_set_next(&jt)) {
-				assert(st != NULL);
+			fprintf(f, "%-2u -> %2u", s, e.state);
 
-				fprintf(f, "%-2u -> %2u", indexof(fsm, s), indexof(fsm, st));
+			fputs(" \"", f);
+			fsm_escputc(f, fsm->opt, e.symbol);
+			putc('\"', f);
 
-				fputs(" \"", f);
-				fsm_escputc(f, fsm->opt, e->symbol);
-				putc('\"', f);
+			fprintf(f, ";");
 
-				fprintf(f, ";");
+			if (fsm->opt->comments) {
+				fsm_state_t start;
 
-				if (fsm->opt->comments) {
-					if (st == fsm->start) {
+				if (fsm_getstart(fsm, &start)) {
+					if (e.state == start) {
 						fprintf(f, " # start");
-					} else if (fsm->start != NULL && !fsm_has(fsm, fsm_hasepsilons)) {
+					} else if (!fsm_has(fsm, fsm_hasepsilons)) {
 						char buf[50];
 						int n;
 
-						n = fsm_example(fsm, st, buf, sizeof buf);
+						n = fsm_example(fsm, e.state, buf, sizeof buf);
 						if (-1 == n) {
 							perror("fsm_example");
 							return;
@@ -164,36 +167,32 @@ fsm_print_fsm(FILE *f, const struct fsm *fsm)
 						}
 					}
 				}
-
-				fprintf(f, "\n");
 			}
+
+			fprintf(f, "\n");
 		}
 	}
 
 	fprintf(f, "\n");
 
-	start = fsm_getstart(fsm);
-	if (start == NULL) {
+	if (!fsm_getstart(fsm, &start)) {
 		return;
 	}
 
-	fprintf(f, "start: %u;\n", indexof(fsm, start));
+	fprintf(f, "start: %u;\n", start);
 
-	end = 0;
-	for (s = fsm->sl; s != NULL; s = s->next) {
-		end += !!fsm_isend(fsm, s);
-	}
+	end = fsm->endcount;
 
 	if (end == 0) {
 		return;
 	}
 
 	fprintf(f, "end:   ");
-	for (s = fsm->sl; s != NULL; s = s->next) {
+	for (s = 0; s < fsm->statecount; s++) {
 		if (fsm_isend(fsm, s)) {
 			end--;
 
-			fprintf(f, "%u%s", indexof(fsm, s), end > 0 ? ", " : ";\n");
+			fprintf(f, "%u%s", s, end > 0 ? ", " : ";\n");
 		}
 	}
 }

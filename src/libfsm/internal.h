@@ -13,8 +13,10 @@
 #include <fsm/fsm.h>
 #include <fsm/options.h>
 
+struct bm;
 struct edge_set;
 struct state_set;
+struct state_array;
 
 /*
  * The alphabet (Sigma) for libfsm's FSM is arbitrary octets.
@@ -39,56 +41,68 @@ struct state_set;
 #define FSM_ENDCOUNT_MAX ULONG_MAX
 
 struct fsm_edge {
-	struct state_set *sl;
+	fsm_state_t state; /* destination */
 	unsigned char symbol;
 };
 
 struct fsm_state {
 	unsigned int end:1;
-	unsigned int reachable:1;
+
+	/* meaningful within one particular transformation only */
+	unsigned int visited:1;
 
 	struct edge_set *edges;
 	struct state_set *epsilons;
 
 	void *opaque;
-
-	/* these are only valid within one particular transformation.
-	 * expected to be NULL at start and set back to NULL after. */
-	union {
-		/* temporary relation between one FSM and another */
-		struct fsm_state *equiv;
-		/* tracks which states have been visited in walk2 */
-		struct fsm_state *visited;
-	} tmp;
-
-	struct fsm_state *next;
 };
 
 struct fsm {
-	struct fsm_state *sl;
-	struct fsm_state **tail; /* tail of .sl */
-	struct fsm_state *start;
+	struct fsm_state *states; /* array */
 
-	unsigned long endcount;
+	size_t statealloc; /* number of elements allocated */
+	size_t statecount; /* number of elements populated */
+	size_t endcount;
+
+	fsm_state_t start;
+	unsigned int hasstart:1;
 
 	const struct fsm_options *opt;
 };
 
-struct fsm_edge *
-fsm_hasedge_literal(const struct fsm_state *s, char c);
+void
+fsm_carryopaque_array(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
+    struct fsm *dst_fsm, fsm_state_t dst_state);
 
 void
 fsm_carryopaque(struct fsm *fsm, const struct state_set *set,
-	struct fsm *new, struct fsm_state *state);
+	struct fsm *new, fsm_state_t state);
+
+struct fsm *
+fsm_mergeab(struct fsm *a, struct fsm *b,
+    fsm_state_t *base_b);
+
+int
+state_hasnondeterminism(const struct fsm *fsm, fsm_state_t state, struct bm *bm);
+
+/*
+ * TODO: if this were a public API, we could present ragged array of { a, n } structs
+ * for states, with wrapper to populate malloced array of user-facing structs.
+ */
+struct state_set **
+epsilon_closure(struct fsm *fsm);
+
+int
+symbol_closure_without_epsilons(const struct fsm *fsm, fsm_state_t s,
+	struct state_set *sclosures[]);
+
+int
+symbol_closure(const struct fsm *fsm, fsm_state_t s,
+	struct state_set * const eclosures[],
+	struct state_set *sclosures[]);
 
 void
-fsm_clear_tmp(struct fsm *fsm);
-
-void
-fsm_state_clear_tmp(struct fsm_state *state);
-
-struct state_set *
-epsilon_closure(const struct fsm_state *state, struct state_set *closure);
+closure_free(struct state_set **closures, size_t n);
 
 /*
  * Internal free function that invokes free(3) by default, or a user-provided
