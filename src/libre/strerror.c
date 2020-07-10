@@ -20,7 +20,6 @@ re_strerror(enum re_errno e)
 	case RE_EBADDIALECT:  return "Bad dialect";
 	case RE_EBADGROUP:    return "Bad group";
 
-	case RE_EOVERLAP:     return "Redundancy in group";
 	case RE_ENEGRANGE:    return "Negative group range";
 	case RE_ENEGCOUNT:    return "Negative count range";
 	case RE_EDISTINCT:    return "Identical endpoints in group range";
@@ -36,7 +35,6 @@ re_strerror(enum re_errno e)
 	case RE_EXGROUP:      return "Syntax error: expected group";
 	case RE_EXATOM:       return "Syntax error: expected atom";
 	case RE_EXCOUNT:      return "Syntax error: expected count";
-	case RE_EXATOMS:      return "Syntax error: expected atoms list";
 	case RE_EXALTS:       return "Syntax error: expected alternative list";
 	case RE_EXRANGE:      return "Syntax error: expected range separator";
 	case RE_EXCLOSEGROUP: return "Syntax error: group is not closed";
@@ -45,6 +43,7 @@ re_strerror(enum re_errno e)
 	case RE_EXESC:        return "Syntax error: expected character escape";
 	case RE_EXCLOSEFLAGS: return "Syntax error: flags are not closed";
 	case RE_EXUNSUPPORTD: return "Syntax error: unsupported operator";
+	case RE_EBADCP:       return "Syntax error: invalid codepoint";
 	}
 
 	assert(!"unreached");

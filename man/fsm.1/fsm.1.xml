@@ -48,6 +48,7 @@
 	<!ENTITY fsm.lit  "<literal>fsm</literal>">
 	<!ENTITY ir.lit   "<literal>ir</literal>">
 	<!ENTITY json.lit "<literal>json</literal>">
+	<!ENTITY sh.lit   "<literal>sh</literal>">
 ]>
 
 <refentry>
@@ -257,6 +258,14 @@
 			</varlistentry>
 
 			<varlistentry>
+				<term>&G.opt;</term>
+
+				<listitem>
+					<para>Equivalent to <code>-t&nbsp;glushkovise</code>.</para>
+				</listitem>
+			</varlistentry>
+
+			<varlistentry>
 				<term>&m.opt;</term>
 
 				<listitem>
@@ -328,6 +337,15 @@
 							</tr>
 							<tr>
 								<td><code>dfa</code></td>
+							</tr>
+							<tr>
+								<td><code>glushkovise</code></td>
+								<td rowspan="2">&fsm_glushkovise.3;</td>
+								<td rowspan="2">Eliminate epsilon transitions from the &fsm;, converting a
+									Thompson NFA into a Glushkov NFA.</td>
+							</tr>
+							<tr>
+								<td><code>glush</code></td>
 							</tr>
 							<tr>
 								<td><code>minimise</code></td>
@@ -420,6 +438,13 @@
 								<td><code>count</code></td>
 								<td rowspan="1">&fsm_countstates.3;</td>
 								<td rowspan="1">Count of the number of states in the &fsm;.
+									Printed to &stdout.lit;; exit status is always true.</td>
+							</tr>
+							<tr>
+								<td><code>epsilonclosure</code></td>
+								<td rowspan="1" role="na">&ndash;</td>
+								<td rowspan="1">Compute the <newterm>epsilon closure</newterm>
+									of each state in the &fsm;.
 									Printed to &stdout.lit;; exit status is always true.</td>
 							</tr>
 						</tbody>

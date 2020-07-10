@@ -6,19 +6,39 @@
 
 #include <assert.h>
 #include <stdlib.h>
+
 #include <adt/hashset.h>
 
-int cmp_int(const void *a_, const void *b_) {
-	int a = *(const int *)a_, b = *(const int *)b_;
-	if (a > b)      return 1;
-	else if (a < b) return -1;
-	else            return 0;
+typedef int item_t;
+
+#include "hashset.inc"
+
+static int
+cmp_int(const void *a, const void *b)
+{
+	const int *pa = * (const int * const *) a;
+	const int *pb = * (const int * const *) b;
+
+	if (*pa > *pb)      return +1;
+	else if (*pa < *pb) return -1;
+	else                return  0;
 }
 
-unsigned long hash_int(const void *a_)
+static unsigned long
+hash_int(const void *a)
 {
-	const int *a = a_;
-	return hashrec(a, sizeof *a);
+	return hashrec(a, sizeof * (const int *) a);
+}
+
+int
+hashset_contains(const struct hashset *set, const void *item)
+{
+	unsigned long h = hash_int(item);
+	size_t b = 0;
+
+	assert(set != NULL);
+
+	return finditem(set, h, item, &b);
 }
 
 int *next_int(int reset) {
@@ -37,7 +57,7 @@ int *next_int(int reset) {
 }
 
 int main(void) {
-	struct hashset *s = hashset_create(NULL, hash_int,cmp_int);
+	struct hashset *s = hashset_create(NULL, hash_int, cmp_int);
 	size_t i;
 	for (i = 0; i < 5000; i++) {
 		assert(hashset_add(s, next_int(0)));

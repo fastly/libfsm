@@ -9,8 +9,10 @@
 #include <unistd.h>
 
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h> /* XXX: for ast.h */
 #include <stdio.h>
 #include <ctype.h>
 
@@ -19,12 +21,19 @@
 #include <fsm/pred.h>
 #include <fsm/print.h>
 #include <fsm/options.h>
+#include <fsm/vm.h>
 
 #include <re/re.h>
 
 #include "libfsm/internal.h" /* XXX */
-#include "libre/re_comp.h" /* XXX */
 #include "libre/print.h" /* XXX */
+#include "libre/class.h" /* XXX */
+#include "libre/ast.h" /* XXX */
+
+
+#define DEBUG_ESCAPES     0
+#define DEBUG_VM_FSM      0
+#define DEBUG_TEST_REGEXP 0
 
 /*
  * TODO: accepting a delimiter would be useful: /abc/. perhaps provide that as
@@ -86,27 +95,36 @@ io(const char *name)
 
 static void
 print_name(const char *name,
-	fsm_print **print_fsm, re_ast_print **print_ast)
+	fsm_print **print_fsm, ast_print **print_ast)
 {
 	size_t i;
 
 	struct {
 		const char *name;
-		fsm_print    *print_fsm;
-		re_ast_print *print_ast;
+		fsm_print *print_fsm;
+		ast_print *print_ast;
 	} a[] = {
-		{ "api",    fsm_print_api,    NULL  },
-		{ "c",      fsm_print_c,      NULL  },
-		{ "dot",    fsm_print_dot,    NULL  },
-		{ "fsm",    fsm_print_fsm,    NULL  },
-		{ "ir",     fsm_print_ir,     NULL  },
-		{ "irjson", fsm_print_irjson, NULL  },
-		{ "json",   fsm_print_json,   NULL  },
+		{ "api",    fsm_print_api,    NULL },
+		{ "c",      fsm_print_c,      NULL },
+		{ "dot",    fsm_print_dot,    NULL },
+		{ "fsm",    fsm_print_fsm,    NULL },
+		{ "ir",     fsm_print_ir,     NULL },
+		{ "irjson", fsm_print_irjson, NULL },
+		{ "json",   fsm_print_json,   NULL },
+		{ "vmc",    fsm_print_vmc,    NULL },
+		{ "vmdot",  fsm_print_vmdot,  NULL },
+		{ "sh",     fsm_print_sh,     NULL },
+		{ "go",     fsm_print_go,     NULL },
 
-		{ "tree",   NULL, re_ast_print_tree },
-		{ "abnf",   NULL, re_ast_print_abnf },
-		{ "ast",    NULL, re_ast_print_dot  },
-		{ "pcre",   NULL, re_ast_print_pcre }
+		{ "amd64",      fsm_print_vmasm,            NULL },
+		{ "amd64_att",  fsm_print_vmasm_amd64_att,  NULL },
+		{ "amd64_nasm", fsm_print_vmasm_amd64_nasm, NULL },
+		{ "amd64_go",   fsm_print_vmasm_amd64_go,   NULL },
+
+		{ "tree",   NULL, ast_print_tree },
+		{ "abnf",   NULL, ast_print_abnf },
+		{ "ast",    NULL, ast_print_dot  },
+		{ "pcre",   NULL, ast_print_pcre }
 	};
 
 	assert(name != NULL);
@@ -273,21 +291,19 @@ addmatch(struct match **head, int i, const char *s)
 }
 
 static void
-carryopaque(const struct fsm_state **set, size_t n,
-	struct fsm *fsm, struct fsm_state *state)
+carryopaque(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
+	struct fsm *dst_fsm, fsm_state_t dst_state)
 {
 	struct match *matches;
 	struct match *m;
 	size_t i;
 
-	assert(set != NULL); /* TODO: right? */
-	assert(n > 0); /* TODO: right? */
-	assert(fsm != NULL);
-	assert(state != NULL);
-
-	if (!fsm_isend(fsm, state)) {
-		return;
-	}
+	assert(src_fsm != NULL);
+	assert(src_set != NULL);
+	assert(n > 0);
+	assert(dst_fsm != NULL);
+	assert(fsm_isend(dst_fsm, dst_state));
+	assert(fsm_getopaque(dst_fsm, dst_state) == NULL);
 
 	/*
 	 * Here we mark newly-created DFA states with the same regexp string
@@ -301,13 +317,17 @@ carryopaque(const struct fsm_state **set, size_t n,
 	matches = NULL;
 
 	for (i = 0; i < n; i++) {
-		if (!fsm_isend(fsm, set[i])) {
+		/*
+		 * The opaque data is attached to end states only, so we skip
+		 * non-end states here.
+		 */
+		if (!fsm_isend(src_fsm, src_set[i])) {
 			continue;
 		}
 
-		assert(fsm_getopaque(fsm, set[i]) != NULL);
+		assert(fsm_getopaque(src_fsm, src_set[i]) != NULL);
 
-		for (m = fsm_getopaque(fsm, set[i]); m != NULL; m = m->next) {
+		for (m = fsm_getopaque(src_fsm, src_set[i]); m != NULL; m = m->next) {
 			if (!addmatch(&matches, m->i, m->s)) {
 				perror("addmatch");
 				goto error;
@@ -315,7 +335,7 @@ carryopaque(const struct fsm_state **set, size_t n,
 		}
 	}
 
-	fsm_setopaque(fsm, state, matches);
+	fsm_setopaque(dst_fsm, dst_state, matches);
 
 	return;
 
@@ -323,20 +343,19 @@ error:
 
 	/* XXX: free matches */
 
-	fsm_setopaque(fsm, state, NULL);
+	fsm_setopaque(dst_fsm, dst_state, NULL);
 
 	return;
 }
 
 static void
-printexample(FILE *f, const struct fsm *fsm, const struct fsm_state *state)
+printexample(FILE *f, const struct fsm *fsm, fsm_state_t state)
 {
 	char buf[256]; /* TODO */
 	int n;
 
 	assert(f != NULL);
 	assert(fsm != NULL);
-	assert(state != NULL);
 
 	n = fsm_example(fsm, state, buf, sizeof buf);
 	if (-1 == n) {
@@ -427,13 +446,42 @@ endleaf_dot(FILE *f, const void *state_opaque, const void *endleaf_opaque)
 	return 0;
 }
 
+static int
+endleaf_json(FILE *f, const void *state_opaque, const void *endleaf_opaque)
+{
+	const struct match *m;
+
+	assert(f != NULL);
+	assert(state_opaque != NULL);
+	assert(endleaf_opaque == NULL);
+
+	(void) endleaf_opaque;
+
+	fprintf(f, "[ ");
+
+	for (m = state_opaque; m != NULL; m = m->next) {
+		fprintf(f, "%u", m->i);
+
+		if (m->next != NULL) {
+			fprintf(f, ", ");
+		}
+	}
+
+	fprintf(f, " ]");
+
+	/* TODO: only if comments */
+	/* TODO: centralise to libfsm/print/json.c */
+
+	return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
 	struct fsm *(*join)(struct fsm *, struct fsm *);
 	int (*query)(const struct fsm *, const struct fsm *);
 	fsm_print *print_fsm;
-	re_ast_print *print_ast;
+	ast_print *print_ast;
 	enum re_dialect dialect;
 	struct fsm *fsm;
 	enum re_flags flags;
@@ -442,6 +490,9 @@ main(int argc, char *argv[])
 	int keep_nfa;
 	int patterns;
 	int ambig;
+	int makevm;
+
+	struct fsm_dfavm *vm;
 
 	/* note these defaults are the opposite than for fsm(1) */
 	opt.anonymous_states  = 1;
@@ -457,16 +508,18 @@ main(int argc, char *argv[])
 	keep_nfa  = 0;
 	patterns  = 0;
 	ambig     = 0;
+	makevm    = 0;
 	print_fsm = NULL;
 	print_ast = NULL;
 	query     = NULL;
 	join      = fsm_union;
 	dialect   = RE_NATIVE;
+	vm        = NULL;
 
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:" "upmnxyz"), c != -1) {
+		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:" "upMmnxyz"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 0;          break;
 			case 'c': opt.consolidate_edges = 0;          break;
@@ -496,6 +549,7 @@ main(int argc, char *argv[])
 			case 'm': example  = 1; break;
 			case 'n': keep_nfa = 1; break;
 			case 'z': patterns = 1; break;
+			case 'M': makevm   = 1; break;
 
 			case 'h':
 				usage();
@@ -527,6 +581,11 @@ main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
+	if (makevm && (keep_nfa || example || query)) {
+		fprintf(stderr, "-M cannot be used with -m, -q, or -n\n");
+		return EXIT_FAILURE;
+	}
+
 	if (patterns && !!query) {
 		fprintf(stderr, "-z does not apply for querying\n");
 		return EXIT_FAILURE;
@@ -547,7 +606,7 @@ main(int argc, char *argv[])
 
 	/* XXX: repetitive */
 	if (print_ast != NULL) {
-		struct ast_re *ast;
+		struct ast *ast;
 		struct re_err err;
 
 		if (argc != 1) {
@@ -560,7 +619,7 @@ main(int argc, char *argv[])
 
 			f = xopen(argv[0]);
 
-			ast = re_parse(dialect, fsm_fgetc, f, &opt, flags, &err);
+			ast = re_parse(dialect, fsm_fgetc, f, &opt, flags, &err, NULL);
 
 			fclose(f);
 		} else {
@@ -568,7 +627,7 @@ main(int argc, char *argv[])
 
 			s = argv[0];
 
-			ast = re_parse(dialect, fsm_sgetc, &s, &opt, flags, &err);
+			ast = re_parse(dialect, fsm_sgetc, &s, &opt, flags, &err, NULL);
 		}
 
 		if (ast == NULL) {
@@ -641,6 +700,10 @@ main(int argc, char *argv[])
 			}
 
 			if (!keep_nfa) {
+				if (!fsm_determinise(new)) {
+					perror("fsm_determinise");
+					return EXIT_FAILURE;
+				}
 				if (!fsm_minimise(new)) {
 					perror("fsm_minimise");
 					return EXIT_FAILURE;
@@ -648,7 +711,7 @@ main(int argc, char *argv[])
 			}
 
 			{
-				struct fsm_state *s;
+				size_t s;
 
 				/*
 				 * Attach this mapping to each end state for this regexp.
@@ -656,7 +719,7 @@ main(int argc, char *argv[])
 				 * in the same regexp, and keep an argc-sized array of pointers to free().
 				 * XXX: then use fsm_setendopaque() here.
 				 */
-				for (s = new->sl; s != NULL; s = s->next) {
+				for (s = 0; s < new->statecount; s++) {
 					if (fsm_isend(new, s)) {
 						struct match *matches;
 
@@ -721,8 +784,8 @@ main(int argc, char *argv[])
 	}
 
 	if (!ambig) {
-		const struct fsm_state *s;
 		struct fsm *dfa;
+		size_t s;
 
 		dfa = fsm_clone(fsm);
 		if (dfa == NULL) {
@@ -741,7 +804,7 @@ main(int argc, char *argv[])
 			opt.carryopaque = NULL;
 		}
 
-		for (s = dfa->sl; s != NULL; s = s->next) {
+		for (s = 0; s < dfa->statecount; s++) {
 			const struct match *matches;
 
 			if (!fsm_isend(dfa, s)) {
@@ -784,28 +847,31 @@ main(int argc, char *argv[])
 		opt.carryopaque = carryopaque;
 
 		/*
-		 * Minimise only when we don't need to keep the end state information
-		 * separated per regexp. Otherwise, convert to a DFA.
-		 */
+		 * Convert to a DFA, then minimise unless we need to keep the end
+		 * state information separated per regexp. */
+		if (!fsm_determinise(fsm)) {
+			perror("fsm_determinise");
+			return EXIT_FAILURE;
+		}
+
 		if (!patterns && !example && print_fsm != fsm_print_c) {
 			if (!fsm_minimise(fsm)) {
 				perror("fsm_minimise");
 				return EXIT_FAILURE;
 			}
-		} else {
-			if (!fsm_determinise(fsm)) {
-				perror("fsm_determinise");
-				return EXIT_FAILURE;
-			}
 		}
 
 		opt.carryopaque = NULL;
+
+		if (makevm) {
+			vm = fsm_vm_compile(fsm);
+		}
 	}
 
 	if (example) {
-		struct fsm_state *s;
+		fsm_state_t s;
 
-		for (s = fsm->sl; s != NULL; s = s->next) {
+		for (s = 0; s < fsm->statecount; s++) {
 			if (!fsm_isend(fsm, s)) {
 				continue;
 			}
@@ -840,15 +906,21 @@ main(int argc, char *argv[])
 		/* TODO: print examples in comments for end states;
 		 * patterns in comments for the whole FSM */
 
-		if (print_fsm == fsm_print_c) {
+		if (print_fsm == fsm_print_c || print_fsm == fsm_print_vmc) {
 			opt.endleaf = endleaf_c;
-		} else if (print_fsm == fsm_print_dot) {
+		} else if (print_fsm == fsm_print_dot || print_fsm == fsm_print_vmdot) {
 			opt.endleaf = patterns ? endleaf_dot : NULL;
+		} else if (print_fsm == fsm_print_json) {
+			opt.endleaf = patterns ? endleaf_json : NULL;
 		}
 
 		print_fsm(stdout, fsm);
 
 /* XXX: free fsm */
+		
+		if (vm != NULL) {
+			fsm_vm_free(vm);
+		}
 
 		return 0;
 	}
@@ -867,14 +939,19 @@ main(int argc, char *argv[])
 			 * a pattern to the end state), like lx(1) does */
 
 			for (i = 0; i < argc; i++) {
-				const struct fsm_state *state;
+				fsm_state_t state;
+				int e;
 
 				if (xfiles) {
 					FILE *f;
 
-					f = xopen(argv[0]);
+					f = xopen(argv[i]);
 
-					state = fsm_exec(fsm, fsm_fgetc, f);
+					if (vm != NULL) {
+						e = fsm_vm_match_file(vm, f);
+					} else {
+						e = fsm_exec(fsm, fsm_fgetc, f, &state);
+					}
 
 					fclose(f);
 				} else {
@@ -882,10 +959,14 @@ main(int argc, char *argv[])
 
 					s = argv[i];
 
-					state = fsm_exec(fsm, fsm_sgetc, &s);
+					if (vm != NULL) {
+						e = fsm_vm_match_buffer(vm, s, strlen(s));
+					} else {
+						e = fsm_exec(fsm, fsm_sgetc, &s, &state);
+					}
 				}
 
-				if (state == NULL) {
+				if (e != 1) {
 					r |= 1;
 					continue;
 				}
@@ -906,6 +987,10 @@ main(int argc, char *argv[])
 		/* XXX: free opaques */
 
 		fsm_free(fsm);
+
+		if (vm != NULL) {
+			fsm_vm_free(vm);
+		}
 
 		return r;
 	}

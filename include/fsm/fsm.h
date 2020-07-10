@@ -16,10 +16,15 @@
  */
 
 struct fsm;
-struct fsm_state;
-struct fsm_determinise_cache;
 struct fsm_options;
 struct path; /* XXX */
+
+/*
+ * States in libfsm are referred to by a 0-based numeric index.
+ * This is an unsigned integer type - exactly which type is
+ * supposed to be private, and may be changed.
+ */
+typedef unsigned int fsm_state_t;
 
 /*
  * Create a new FSM. This is to be freed with fsm_free(). A structure allocated
@@ -75,21 +80,28 @@ fsm_move(struct fsm *dst, struct fsm *src);
  * Cannot return NULL.
  */
 struct fsm *
-fsm_merge(struct fsm *a, struct fsm *b);
+fsm_merge(struct fsm *a, struct fsm *b,
+	fsm_state_t *base_a, fsm_state_t *base_b);
 
 /*
  * Add a state.
  *
- * Returns NULL on error; see errno.
+ * Returns 1 on success, or 0 on error; see errno.
  */
-struct fsm_state *
-fsm_addstate(struct fsm *fsm);
+int
+fsm_addstate(struct fsm *fsm, fsm_state_t *state);
+
+/*
+ * Add multiple states.
+ */
+int
+fsm_addstate_bulk(struct fsm *fsm, size_t n);
 
  /*
  * Remove a state. Any edges transitioning to this state are also removed.
  */
 void
-fsm_removestate(struct fsm *fsm, struct fsm_state *state);
+fsm_removestate(struct fsm *fsm, fsm_state_t state);
 
 /*
  * Add an edge from a given state to a given state, labelled with the given
@@ -105,13 +117,13 @@ fsm_removestate(struct fsm *fsm, struct fsm_state *state);
  * Returns 1 on success, or 0 on error; see errno.
  */
 int
-fsm_addedge_epsilon(struct fsm *fsm, struct fsm_state *from, struct fsm_state *to);
+fsm_addedge_epsilon(struct fsm *fsm, fsm_state_t from, fsm_state_t to);
 
 int
-fsm_addedge_any(struct fsm *fsm, struct fsm_state *from, struct fsm_state *to);
+fsm_addedge_any(struct fsm *fsm, fsm_state_t from, fsm_state_t to);
 
 int
-fsm_addedge_literal(struct fsm *fsm, struct fsm_state *from, struct fsm_state *to,
+fsm_addedge_literal(struct fsm *fsm, fsm_state_t from, fsm_state_t to,
 	char c);
 
 /*
@@ -126,8 +138,8 @@ fsm_addedge_literal(struct fsm *fsm, struct fsm_state *from, struct fsm_state *t
  * Returns NULL if there is no mode (e.g. the given state has no edges),
  * and *freq is unchanged.
  */
-struct fsm_state *
-fsm_findmode(const struct fsm_state *state, unsigned int *freq);
+fsm_state_t
+fsm_findmode(const struct fsm *fsm, fsm_state_t state, unsigned int *freq);
 
 /*
  * Mark a given state as being an end state or not. The value of end is treated
@@ -135,7 +147,7 @@ fsm_findmode(const struct fsm_state *state, unsigned int *freq);
  * is marked as an end state.
  */
 void
-fsm_setend(struct fsm *fsm, struct fsm_state *state, int end);
+fsm_setend(struct fsm *fsm, fsm_state_t state, int end);
 
 /*
  * Set data associated with all end states.
@@ -147,23 +159,26 @@ fsm_setendopaque(struct fsm *fsm, void *opaque);
  * Set data associated with an end state.
  */
 void
-fsm_setopaque(struct fsm *fsm, struct fsm_state *state, void *opaque);
+fsm_setopaque(struct fsm *fsm, fsm_state_t state, void *opaque);
 
 /*
  * Get data associated with an end state.
  */
 void *
-fsm_getopaque(const struct fsm *fsm, const struct fsm_state *state);
+fsm_getopaque(const struct fsm *fsm, fsm_state_t state);
 
 /*
- * Return state (if there is just one), or add epsilon edges from all states,
+ * Find the state (if there is just one), or add epsilon edges from all states,
  * for which the given predicate is true.
  *
- * Returns NULL on error, or if there is no state.
+ * Returns 1 on success, or 0 on error; see errno.
  */
-struct fsm_state *
-fsm_collate(struct fsm *fsm,
-	int (*predicate)(const struct fsm *, const struct fsm_state *));
+int
+fsm_collate(struct fsm *fsm, fsm_state_t *state,
+	int (*predicate)(const struct fsm *, fsm_state_t));
+
+void
+fsm_clearstart(struct fsm *fsm);
 
 /*
  * Register a given state as the start state for an FSM. There may only be one
@@ -171,13 +186,14 @@ fsm_collate(struct fsm *fsm,
  * start state exists.
  */
 void
-fsm_setstart(struct fsm *fsm, struct fsm_state *state);
+fsm_setstart(struct fsm *fsm, fsm_state_t state);
 
 /*
- * Return the start state for an FSM. Returns NULL if no start state is set.
+ * Find the start state for an FSM.
+ * Returns 1 on success, or 0 if no start state is set.
  */
-struct fsm_state *
-fsm_getstart(const struct fsm *fsm);
+int
+fsm_getstart(const struct fsm *fsm, fsm_state_t *start);
 
 /*
  * Returns the number of states in the FSM
@@ -192,30 +208,7 @@ unsigned int
 fsm_countedges(const struct fsm *fsm);
 
 /*
- * Duplicate a state and all its targets. This traverses the edges leading out
- * from the state, to the states to which those point, and so on. It does not
- * include edges going *to* the given state, or its descendants.
- *
- * For duplicate_subgraphbetween(), if non-NULL, the state x in the origional
- * subgraph is overwritten with its equivalent state in the duplicated subgraph.
- * This provides a mechanism to keep track of a state of interest (for example
- * the endpoint of a segment).
- *
- * Returns the duplicated state, or NULL on error; see errno.
- *
- * TODO: fsm_state_duplicatesubgraphx() is a horrible inteface, but I'm not
- * sure how else to go about that.
- */
-struct fsm_state *
-fsm_state_duplicatesubgraph(struct fsm *fsm, struct fsm_state *state);
-struct fsm_state *
-fsm_state_duplicatesubgraphx(struct fsm *fsm, struct fsm_state *state,
-	struct fsm_state **x);
-
-/*
- * Merge two states. A new state is returned.
- *
- * Cannot return NULL.
+ * Merge two states. A new state is output to q.
  *
  * Formally, this defines an _equivalence relation_ between the two states.
  * These are joined and the language of the resulting FSM is a superset of
@@ -225,9 +218,12 @@ fsm_state_duplicatesubgraphx(struct fsm *fsm, struct fsm_state *state,
  * transitions), merging states here preserves their epsilon edges. This
  * differs from Hopcroft & Ullman's definition of an equivalence relation,
  * which is done wrt the power set of each state.
+ *
+ * Returns 1 on success, or 0 on error; see errno.
  */
-struct fsm_state *
-fsm_mergestates(struct fsm *fsm, struct fsm_state *a, struct fsm_state *b);
+int
+fsm_mergestates(struct fsm *fsm, fsm_state_t a, fsm_state_t b,
+	fsm_state_t *q);
 
 /*
  * Trim away "dead" states. More formally, this recursively removes
@@ -246,7 +242,7 @@ fsm_trim(struct fsm *fsm);
  * The given FSM is expected to be a Glushkov NFA.
  */
 int
-fsm_example(const struct fsm *fsm, const struct fsm_state *goal,
+fsm_example(const struct fsm *fsm, fsm_state_t goal,
 	char *buf, size_t bufsz);
 
 /*
@@ -258,6 +254,15 @@ int
 fsm_reverse(struct fsm *fsm);
 
 /*
+ * Convert an NFA with epsilon transitions to a Glushkov NFA (NFA without
+ * epsilon transitions).
+ *
+ * Returns false on error; see errno.
+ */
+int
+fsm_glushkovise(struct fsm *fsm);
+
+/*
  * Convert an fsm to a DFA.
  *
  * Returns false on error; see errno.
@@ -266,26 +271,14 @@ int
 fsm_determinise(struct fsm *fsm);
 
 /*
- * Like fsm_determinise_opaque, but allows the caller to store a pointer to
- * resources used by this API, reducing memory allocation and copy pressure.
- *
- * Free the cached data by calling fsm_determinise_freecache().
- */
-int
-fsm_determinise_cache(struct fsm *fsm,
-	struct fsm_determinise_cache **dcache);
-void
-fsm_determinise_freecache(struct fsm *fsm, struct fsm_determinise_cache *dcache);
-
-/*
  * Make a DFA complete, as per fsm_iscomplete.
  */
 int
 fsm_complete(struct fsm *fsm,
-	int (*predicate)(const struct fsm *, const struct fsm_state *));
+	int (*predicate)(const struct fsm *, fsm_state_t));
 
 /*
- * Minimize an FSM to its canonical form.
+ * Minimize a DFA to its canonical form.
  *
  * Returns false on error; see errno.
  */
@@ -324,8 +317,8 @@ fsm_equal(const struct fsm *a, const struct fsm *b);
  */
 struct path *
 fsm_shortest(const struct fsm *fsm,
-	const struct fsm_state *start, const struct fsm_state *goal,
-	unsigned (*cost)(const struct fsm_state *from, const struct fsm_state *to, char c));
+	fsm_state_t start, fsm_state_t goal,
+	unsigned (*cost)(fsm_state_t from, fsm_state_t to, char c));
 
 /*
  * Execute an FSM reading input from the user-specified callback fsm_getc().
@@ -333,9 +326,12 @@ fsm_shortest(const struct fsm *fsm,
  * either an unsigned character cast to int, or EOF to indicate the end of
  * input.
  *
- * Returns the accepting state on a successful parse (i.e. where execution
- * ends in an state set by fsm_setend). Returns NULL for unexpected input,
- * premature EOF, or ending in a state not marked as an end state.
+ * Returns 1 on success, or 0 for unexpected input, premature EOF, or ending
+ * in a state not marked as an end state.
+ * Returns -1 on error; see errno.
+ *
+ * On success, outputs the accepting state on a successful parse (i.e. where
+ * execution ends in an state set by fsm_setend).
  *
  * The returned accepting state is intended to facillitate lookup of
  * its state opaque value previously set by fsm_setopaque() (not to be
@@ -343,8 +339,9 @@ fsm_shortest(const struct fsm *fsm,
  *
  * The given FSM is expected to be a DFA.
  */
-struct fsm_state *
-fsm_exec(const struct fsm *fsm, int (*fsm_getc)(void *opaque), void *opaque);
+int
+fsm_exec(const struct fsm *fsm, int (*fsm_getc)(void *opaque), void *opaque,
+	fsm_state_t *end);
 
 /*
  * Callbacks which may be passed to fsm_exec(). These are conveniences for

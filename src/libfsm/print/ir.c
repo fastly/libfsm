@@ -11,6 +11,12 @@
 #include <errno.h>
 #include <stdio.h>
 
+#include <fsm/fsm.h>
+#include <fsm/pred.h>
+#include <fsm/print.h>
+#include <fsm/walk.h>
+#include <fsm/options.h>
+
 #include <print/esc.h>
 
 #include <adt/alloc.h>
@@ -18,12 +24,6 @@
 #include <adt/bitmap.h>
 #include <adt/stateset.h>
 #include <adt/edgeset.h>
-
-#include <fsm/fsm.h>
-#include <fsm/pred.h>
-#include <fsm/print.h>
-#include <fsm/walk.h>
-#include <fsm/options.h>
 
 #include "libfsm/internal.h"
 
@@ -33,7 +33,7 @@
 struct range {
 	unsigned char start;
 	unsigned char end;
-	const struct fsm_state *to;
+	fsm_state_t to;
 };
 
 struct group_count {
@@ -61,38 +61,20 @@ range_cmp(const void *va, const void *vb)
 	return 0;
 }
 
-static unsigned int
-indexof(const struct fsm *fsm, const struct fsm_state *state)
-{
-	struct fsm_state *s;
-	unsigned int i;
-
-	assert(fsm != NULL);
-	assert(state != NULL);
-
-	for (s = fsm->sl, i = 0; s != NULL; s = s->next, i++) {
-		if (s == state) {
-			return i;
-		}
-	}
-
-	assert(!"unreached");
-	return 0;
-}
-
 static struct ir_group *
-make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct fsm_state *mode,
+make_groups(const struct fsm *fsm, fsm_state_t state,
+	fsm_state_t mode, int have_mode,
 	size_t *u)
 {
 	struct range ranges[FSM_SIGMA_COUNT]; /* worst case, one per symbol */
 	struct ir_group *groups;
-	struct fsm_edge *e;
+	struct fsm_edge e;
 	struct edge_iter it;
 	size_t i, j, k;
-	size_t n;
+	size_t grp_ind, n;
 
 	assert(fsm != NULL);
-	assert(state != NULL);
+	assert(state < fsm->statecount);
 	assert(u != NULL);
 
 	/*
@@ -103,51 +85,23 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 	 * in the second pass below.
 	 */
 
-	n = 0;
+	n = 0;          /* number of allocated ranges */
+	grp_ind = 0;    /* index of current working range */
 
-	for (e = edge_set_first(state->edges, &it); e != NULL; e = edge_set_next(&it)) {
-		struct fsm_state *s;
-
-		if (state_set_empty(e->sl)) {
+	for (edge_set_reset(fsm->states[state].edges, &it); edge_set_next(&it, &e); ) {
+		if (have_mode && e.state == mode) {
 			continue;
 		}
 
-		s = state_set_only(e->sl);
-		if (s == mode) {
-			continue;
+		if (n > 0 && e.symbol == ranges[grp_ind].end + 1 && e.state == ranges[grp_ind].to) {
+			ranges[grp_ind].end = e.symbol;
+		} else {
+			grp_ind = n++;
+
+			ranges[grp_ind].start = e.symbol;
+			ranges[grp_ind].end   = e.symbol;
+			ranges[grp_ind].to    = e.state;
 		}
-
-		ranges[n].start = e->symbol;
-		ranges[n].end   = e->symbol;
-		ranges[n].to    = s;
-
-		if (e->symbol <= UCHAR_MAX - 1) {
-			do {
-				const struct fsm_edge *ne;
-				const struct fsm_state *ns;
-				struct edge_iter jt;
-
-				ne = edge_set_firstafter(state->edges, &jt, e);
-				if (ne == NULL || ne->symbol != e->symbol + 1) {
-					break;
-				}
-
-				if (state_set_empty(ne->sl)) {
-					break;
-				}
-
-				ns = state_set_only(ne->sl);
-				if (ns == mode || ns != s) {
-					break;
-				}
-
-				ranges[n].end = ne->symbol;
-
-				e = edge_set_next(&it);
-			} while (e != NULL);
-		}
-
-		n++;
 	}
 
 	assert(n > 0);
@@ -168,8 +122,8 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 	j = 0;
 
 	while (i < n) {
-		const struct fsm_state *to;
 		struct ir_range *p;
+		fsm_state_t to;
 
 		to = ranges[i].to;
 
@@ -189,7 +143,7 @@ make_groups(const struct fsm *fsm, const struct fsm_state *state, const struct f
 			k++;
 		} while (i < n && ranges[i].to == to);
 
-		groups[j].to = indexof(fsm, to);
+		groups[j].to = to;
 		groups[j].n = k;
 
 		{
@@ -352,8 +306,7 @@ error:
 }
 
 static int
-make_state(const struct fsm *fsm,
-	struct fsm_state *state,
+make_state(const struct fsm *fsm, fsm_state_t state,
 	const struct ir *ir, struct ir_state *cs)
 {
 	struct ir_group *groups;
@@ -363,49 +316,53 @@ make_state(const struct fsm *fsm,
 	size_t n;
 
 	struct {
-		struct fsm_state *state;
-		unsigned int freq;
+		fsm_state_t state;
+		unsigned int freq; /* 0 meaning no mode */
 	} mode;
+
+	(void)ir; /* unused */
 
 	assert(fsm != NULL);
 	assert(fsm->opt != NULL);
-	assert(state != NULL);
+	assert(state < fsm->statecount);
 	assert(ir != NULL);
 
 	/* TODO: IR_TABLE */
 
 	/* no edges */
 	{
-		if (edge_set_empty(state->edges)) {
+		if (edge_set_empty(fsm->states[state].edges)) {
 			cs->strategy = IR_NONE;
 			return 0;
 		}
 	}
 
 	if (fsm_iscomplete(fsm, state)) {
-		mode.state = fsm_findmode(state, &mode.freq);
+		mode.state = fsm_findmode(fsm, state, &mode.freq);
 	} else {
-		mode.state = NULL;
+		mode.freq = 0;
 	}
 
+	assert(mode.freq == 0 || mode.state < fsm->statecount);
+
 	/* all edges go to the same state */
-	if (mode.state != NULL && mode.freq == FSM_SIGMA_COUNT) {
+	if (mode.freq == FSM_SIGMA_COUNT) {
 		cs->strategy  = IR_SAME;
-		cs->u.same.to = indexof(fsm, mode.state);
+		cs->u.same.to = mode.state;
 		return 0;
 	}
 
-	groups = make_groups(fsm, state, mode.state, &n);
+	groups = make_groups(fsm, state, mode.state, mode.freq > 0, &n);
 	if (groups == NULL) {
 		return -1;
 	}
 
 	/* one dominant mode */
-	if (mode.state != NULL) {
+	if (mode.freq > 0) {
 		cs->strategy = IR_DOMINANT;
 		cs->u.dominant.groups = groups;
 		cs->u.dominant.n = n;
-		cs->u.dominant.mode = indexof(fsm, mode.state);
+		cs->u.dominant.mode = mode.state;
 		return 0;
 	}
 
@@ -466,13 +423,16 @@ make_state(const struct fsm *fsm,
 struct ir *
 make_ir(const struct fsm *fsm)
 {
+	fsm_state_t start, i;
 	struct ir *ir;
-	struct fsm_state *s;
-	size_t i;
 
 	assert(fsm != NULL);
 	assert(fsm->opt != NULL);
-	assert(fsm->start != NULL);
+
+	if (!fsm_getstart(fsm, &start)) {
+		errno = EINVAL;
+		return NULL;
+	}
 
 	if (!fsm_all(fsm, fsm_isdfa)) {
 		errno = EINVAL;
@@ -491,17 +451,15 @@ make_ir(const struct fsm *fsm)
 		return NULL;
 	}
 
-	for (s = fsm->sl, i = 0; s != NULL; s = s->next, i++) {
+	ir->start = start;
+
+	for (i = 0; i < fsm->statecount; i++) {
 		assert(i < ir->n);
 
-		ir->states[i].isend  = fsm_isend(fsm, s);
-		ir->states[i].opaque = s->opaque;
+		ir->states[i].isend  = fsm_isend(fsm, i);
+		ir->states[i].opaque = fsm_isend(fsm, i) ? fsm_getopaque(fsm, i) : NULL;
 
-		if (s == fsm->start) {
-			ir->start = i;
-		}
-
-		if (make_state(fsm, s, ir, &ir->states[i]) == -1) {
+		if (make_state(fsm, i, ir, &ir->states[i]) == -1) {
 			goto error;
 		}
 
@@ -511,7 +469,7 @@ make_ir(const struct fsm *fsm)
 			char *p;
 			int n;
 
-			if (s == fsm->start) {
+			if (i == start) {
 				ir->states[i].example = NULL;
 				continue;
 			}
@@ -526,7 +484,7 @@ make_ir(const struct fsm *fsm)
 				goto error_example;
 			}
 
-			n = fsm_example(fsm, s, p, ir->n + 1);
+			n = fsm_example(fsm, i, p, ir->n + 1);
 			if (-1 == n) {
 				f_free(fsm->opt->alloc, p);
 				goto error_example;

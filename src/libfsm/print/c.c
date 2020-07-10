@@ -75,6 +75,8 @@ print_ranges(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 	size_t k;
 	size_t c;
 
+	(void)ir; /* unused */
+
 	assert(f != NULL);
 	assert(ir != NULL);
 	assert(opt != NULL);
@@ -369,7 +371,7 @@ fsm_print_c_complete(FILE *f, const struct ir *ir, const struct fsm_options *opt
 		break;
 
 	case FSM_IO_PAIR:
-		fprintf(f, "\tfor (p = b; *p != e; p++) {\n");
+		fprintf(f, "\tfor (p = b; p != e; p++) {\n");
 		break;
 	}
 

@@ -22,9 +22,14 @@
 #include <fsm/print.h>
 #include <fsm/options.h>
 
-#include "parser.h"
+#include <adt/stateset.h> /* XXX */
 
-#if defined(__APPLE__) && defined(__MACH__) && defined(MACOS_HAS_NO_CLOCK_GETTME)
+#include "libfsm/internal.h" /* XXX */
+
+#include "parser.h"
+#include "wordgen.h"
+
+#if defined(__APPLE__) && defined(__MACH__) && defined(MACOS_HAS_NO_CLOCK_GETITME)
 #include <mach/clock.h>
 #include <mach/mach.h>
 
@@ -49,7 +54,7 @@ static int clock_gettime(int clk_id, struct timespec *ts)
 
 	return 0;
 }
-#endif /* defined(__APPLE__) && defined(__MACH__) && !defined(MACOS_HAS_CLOCK_GETTME) */
+#endif /* defined(__APPLE__) && defined(__MACH__) && !defined(MACOS_HAS_CLOCK_GETITME) */
 
 extern int optind;
 extern char *optarg;
@@ -67,6 +72,7 @@ enum op {
 	OP_DETERMINISE = ( 4 << 1) | 1,
 	OP_MINIMISE    = ( 5 << 1) | 1,
 	OP_TRIM        = ( 6 << 1) | 1,
+	OP_GLUSHKOVISE = (12 << 1) | 1,
 
 	/* binary */
 	OP_CONCAT      = ( 7 << 1) | 0,
@@ -77,7 +83,17 @@ enum op {
 };
 
 static int
-query_countstates(const struct fsm *fsm, const struct fsm_state *state)
+query_countstates(const struct fsm *fsm, fsm_state_t state)
+{
+	(void) fsm;
+	(void) state;
+
+	/* never called */
+	abort();
+}
+
+static int
+query_epsilonclosure(const struct fsm *fsm, fsm_state_t state)
 {
 	(void) fsm;
 	(void) state;
@@ -93,6 +109,7 @@ usage(void)
 	printf("       fsm {-p} [-l <language>] [-acwX] [-k <io>] [-e <prefix>]\n");
 	printf("       fsm {-dmr | -t <transformation>} [-i <iterations>] [<file.fsm> | <file-a> <file-b>]\n");
 	printf("       fsm {-q <query>} [<file>]\n");
+	printf("       fsm {-W <maxlen>} <file.fsm>\n");
 	printf("       fsm -h\n");
 }
 
@@ -138,12 +155,21 @@ print_name(const char *name)
 		const char *name;
 		fsm_print *f;
 	} a[] = {
-		{ "api",  fsm_print_api  },
-		{ "c",    fsm_print_c    },
-		{ "dot",  fsm_print_dot  },
-		{ "fsm",  fsm_print_fsm  },
-		{ "ir",   fsm_print_ir   },
-		{ "json", fsm_print_json }
+		{ "api",   fsm_print_api   },
+		{ "c",     fsm_print_c     },
+		{ "dot",   fsm_print_dot   },
+		{ "fsm",   fsm_print_fsm   },
+		{ "ir",    fsm_print_ir    },
+		{ "json",  fsm_print_json  },
+		{ "vmc",   fsm_print_vmc   },
+		{ "vmdot", fsm_print_vmdot },
+		{ "sh",    fsm_print_sh    },
+		{ "go",    fsm_print_go    },
+
+		{ "amd64",      fsm_print_vmasm            },
+		{ "amd64_att",  fsm_print_vmasm_amd64_att  },
+		{ "amd64_nasm", fsm_print_vmasm_amd64_nasm },
+		{ "amd64_go",   fsm_print_vmasm_amd64_go   }
 	};
 
 	assert(name != NULL);
@@ -168,8 +194,8 @@ print_name(const char *name)
 static int
 (*query_name(const char *name,
 	int (**walk)(const struct fsm *,
-		int (*)(const struct fsm *, const struct fsm_state *))))
-(const struct fsm *, const struct fsm_state *)
+		int (*)(const struct fsm *, fsm_state_t))))
+(const struct fsm *, fsm_state_t)
 {
 	size_t i;
 
@@ -182,12 +208,13 @@ static int
 	struct {
 		const char *name;
 		int (*walk)(const struct fsm *,
-			int (*)(const struct fsm *, const struct fsm_state *));
-		int (*pred)(const struct fsm *, const struct fsm_state *);
+			int (*)(const struct fsm *, fsm_state_t));
+		int (*pred)(const struct fsm *, fsm_state_t);
 	} a[] = {
 		{ "isdfa",             fsm_all, fsm_isdfa             },
 		{ "dfa",               fsm_all, fsm_isdfa             },
 		{ "count",             NULL,    query_countstates     },
+		{ "epsilonclosure",    NULL,    query_epsilonclosure  },
 		{ "iscomplete",        fsm_all, fsm_iscomplete        },
 		{ "hasend",            fsm_has, fsm_isend             },
 		{ "end",               fsm_has, fsm_isend             },
@@ -239,9 +266,12 @@ op_name(const char *name)
 		{ "determinise", OP_DETERMINISE },
 		{ "dfa",         OP_DETERMINISE },
 		{ "todfa",       OP_DETERMINISE },
+		{ "glush",       OP_GLUSHKOVISE },
+		{ "glushovize",  OP_GLUSHKOVISE },
 		{ "min",         OP_MINIMISE    },
 		{ "minimise",    OP_MINIMISE    },
 		{ "trim",        OP_TRIM        },
+		{ "glushkovise", OP_GLUSHKOVISE },
 
 		{ "cat",         OP_CONCAT      },
 		{ "concat",      OP_CONCAT      },
@@ -293,6 +323,32 @@ xopen(const char *s)
 	return f;
 }
 
+#if 0
+static unsigned int word_maxlen = 16;
+static unsigned int num_words = 8;
+static uint64_t seed = 0xdfa7231bc;
+
+static void
+gen_words(FILE *f, const struct fsm *fsm)
+{
+	struct dfa_wordgen_params params = {
+		.minlen = 1,
+		.maxlen = word_maxlen,
+
+		.prob_stop  = 0.3f,
+		.eps_weight = 0.0f,
+	};
+
+	struct prng_state prng;
+
+	memset(&prng, 0, sizeof prng);
+	prng_seed(&prng, seed);
+
+	fsm_generate_words_to_file(fsm, &params, &prng, num_words, f);
+}
+#endif /* 0 */
+
+
 int
 main(int argc, char *argv[])
 {
@@ -304,9 +360,9 @@ main(int argc, char *argv[])
 	int xfiles;
 	int r;
 
-	int (*query)(const struct fsm *, const struct fsm_state *);
+	int (*query)(const struct fsm *, fsm_state_t);
 	int (*walk )(const struct fsm *,
-		 int (*)(const struct fsm *, const struct fsm_state *));
+		 int (*)(const struct fsm *, fsm_state_t));
 
 	opt.comments = 1;
 	opt.io       = FSM_IO_GETC;
@@ -324,7 +380,7 @@ main(int argc, char *argv[])
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:i:" "xpq:l:dmrt:"), c != -1) {
+		while (c = getopt(argc, argv, "h" "acwXe:k:i:" "xpq:l:dGmrt:W:"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 1;          break;
 			case 'c': opt.consolidate_edges = 1;          break;
@@ -347,6 +403,14 @@ main(int argc, char *argv[])
 			case 'm': op = op_name("minimise");           break;
 			case 'r': op = op_name("reverse");            break;
 			case 't': op = op_name(optarg);               break;
+			case 'G': op = op_name("glushkovise");        break;
+			case 'W':
+				/* print = gen_words; */
+				/* num_words = strtoul(optarg, NULL, 10); */
+				/* XXX: error handling */
+				fprintf(stderr, "not yet implemented.\n");
+				exit(EXIT_FAILURE);
+				break;
 
 			case 'h':
 				usage();
@@ -424,13 +488,20 @@ main(int argc, char *argv[])
 		case OP_COMPLEMENT:  r = fsm_complement(q);   break;
 		case OP_REVERSE:     r = fsm_reverse(q);      break;
 		case OP_DETERMINISE: r = fsm_determinise(q);  break;
-		case OP_MINIMISE:    r = fsm_minimise(q);     break;
+		case OP_GLUSHKOVISE: r = fsm_glushkovise(q);  break;
 		case OP_TRIM:        r = fsm_trim(q);         break;
 
 		case OP_CONCAT:      q = fsm_concat(a, b);    break;
 		case OP_UNION:       q = fsm_union(a, b);     break;
 		case OP_INTERSECT:   q = fsm_intersect(a, b); break;
 		case OP_SUBTRACT:    q = fsm_subtract(a, b);  break;
+
+		case OP_MINIMISE:
+			r = fsm_determinise(q);
+			if (r == 1) {
+				r = fsm_minimise(q);
+			}
+			break;
 
 		case OP_EQUAL:
 			r = fsm_equal(a, b);
@@ -491,6 +562,36 @@ main(int argc, char *argv[])
 			assert(walk == NULL);
 			printf("%u\n", fsm_countstates(fsm));
 			return 0;
+		} else if (query == query_epsilonclosure) {
+			struct state_set **closures;
+			fsm_state_t i, j;
+			size_t n;
+			struct state_iter it;
+
+			closures = epsilon_closure(fsm);
+			if (closures == NULL) {
+				return -1;
+			}
+
+			n = fsm_countstates(fsm);
+
+			for (i = 0; i < n; i++) {
+				int first = 1;
+				if (!opt.anonymous_states) {
+					printf("%u: ", (unsigned) i);
+				}
+				for (state_set_reset(closures[i], &it); state_set_next(&it, &j); ) {
+					printf("%s%u",
+						first ? "" : " ",
+						(unsigned) j);
+					first = 0;
+				}
+				printf("\n");
+			}
+
+			closure_free(closures, fsm->statecount);
+
+			return 0;
 		} else {
 			assert(walk != NULL);
 			r |= !walk(fsm, query);
@@ -507,14 +608,15 @@ main(int argc, char *argv[])
 		 * a pattern to the end state), like lx(1) does */
 
 		for (i = 0; i < argc; i++) {
-			const struct fsm_state *state;
+			fsm_state_t state;
+			int e;
 
 			if (xfiles) {
 				FILE *f;
 
 				f = xopen(argv[0]);
 
-				state = fsm_exec(fsm, fsm_fgetc, f);
+				e = fsm_exec(fsm, fsm_fgetc, f, &state);
 
 				fclose(f);
 			} else {
@@ -522,10 +624,10 @@ main(int argc, char *argv[])
 
 				s = argv[i];
 
-				state = fsm_exec(fsm, fsm_sgetc, &s);
+				e = fsm_exec(fsm, fsm_sgetc, &s, &state);
 			}
 
-			if (state == NULL) {
+			if (e != 1) {
 				r |= 1;
 				continue;
 			}

@@ -9,6 +9,9 @@
 #include <stddef.h>
 #include <limits.h>
 
+#include <fsm/fsm.h>
+#include <fsm/pred.h>
+
 #include <print/esc.h>
 
 #include <adt/bitmap.h>
@@ -16,72 +19,88 @@
 #include <adt/stateset.h>
 #include <adt/edgeset.h>
 
-#include <fsm/pred.h>
-
 #include "../internal.h"
 
-static int
-state_hasnondeterminism(const struct fsm_state *state, struct bm *bm)
+/*
+ * Return a set of each state in the epsilon closure of the given state.
+ * These are all the states reachable through epsilon transitions (that is,
+ * without consuming any input by traversing a labelled edge), including the
+ * given state itself.
+ *
+ * Intermediate states consisting entirely of epsilon transitions are
+ * considered part of the closure.
+ *
+ * Returns closure on success, NULL on error.
+ *
+ * This function is here just to keep it out of the way of the general purpose
+ * implementation of epsilon closure, which operates on all states in bulk.
+ */
+static struct state_set *
+state_epsilon_closure(const struct fsm *fsm, fsm_state_t state,
+	struct state_set **closure)
 {
-	const struct fsm_edge *e;
-	struct edge_iter jt;
+	struct state_iter it;
+	fsm_state_t s;
 
-	assert(state != NULL);
+	assert(fsm != NULL);
+	assert(state < fsm->statecount);
+	assert(closure != NULL);
 
-	for (e = edge_set_first(state->edges, &jt); e != NULL; e = edge_set_next(&jt)) {
-		size_t n;
+	/* Find if the given state is already in the closure */
+	if (state_set_contains(*closure, state)) {
+		return *closure;
+	}
 
-		n = state_set_count(e->sl);
+	if (!state_set_add(closure, fsm->opt->alloc, state)) {
+		return NULL;
+	}
 
-		if (n == 0) {
-			continue;
-		}
-
-		if (n > 1 || (bm != NULL && bm_get(bm, e->symbol))) {
-			return 1;
-		}
-
-		if (bm != NULL) {
-			bm_set(bm, e->symbol);
+	/* Follow each epsilon transition */
+	for (state_set_reset(fsm->states[state].epsilons, &it); state_set_next(&it, &s); ) {
+		if (state_epsilon_closure(fsm, s, closure) == NULL) {
+			return NULL;
 		}
 	}
 
-	return 0;
+	return *closure;
 }
 
 int
-fsm_hasnondeterminism(const struct fsm *fsm, const struct fsm_state *state)
+state_hasnondeterminism(const struct fsm *fsm, fsm_state_t state, struct bm *bm)
 {
-	const struct fsm_state *s;
+	assert(fsm != NULL);
+	assert(state < fsm->statecount);
+	assert(bm != NULL);
+
+	return edge_set_hasnondeterminism(fsm->states[state].edges, bm);
+}
+
+int
+fsm_hasnondeterminism(const struct fsm *fsm, fsm_state_t state)
+{
 	struct state_set *ec;
 	struct state_iter it;
 	struct bm bm;
+	fsm_state_t s;
 
 	assert(fsm != NULL);
-	assert(state != NULL);
+	assert(state < fsm->statecount);
 
-	(void) fsm;
-
-	assert(state != NULL);
+	bm_clear(&bm);
 
 	if (!fsm_hasepsilons(fsm, state)) {
-		return state_hasnondeterminism(state, NULL);
+		return state_hasnondeterminism(fsm, state, &bm);
 	}
 
-	ec = state_set_create(fsm->opt->alloc);
-	if (ec == NULL) {
-		return -1;
-	}
+	ec = NULL;
 
-	if (!epsilon_closure(state, ec)) {
+	if (!state_epsilon_closure(fsm, state, &ec)) {
 		state_set_free(ec);
 		return -1;
 	}
 
-	bm_clear(&bm);
-
-	for (s = state_set_first(ec, &it); s != NULL; s = state_set_next(&it)) {
-		if (state_hasnondeterminism(s, &bm)) {
+	for (state_set_reset(ec, &it); state_set_next(&it, &s); ) {
+		if (state_hasnondeterminism(fsm, s, &bm)) {
 			state_set_free(ec);
 			return 1;
 		}

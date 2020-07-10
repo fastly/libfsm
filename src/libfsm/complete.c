@@ -5,23 +5,27 @@
  */
 
 #include <assert.h>
-#include <stddef.h>
 #include <limits.h>
-
-#include <adt/set.h>
+#include <stddef.h>
+#include <stdio.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
 #include <fsm/walk.h>
 
+#include <print/esc.h>
+
+#include <adt/set.h>
+#include <adt/bitmap.h>
+#include <adt/edgeset.h>
+
 #include "internal.h"
 
 int
 fsm_complete(struct fsm *fsm,
-	int (*predicate)(const struct fsm *, const struct fsm_state *))
+	int (*predicate)(const struct fsm *, fsm_state_t))
 {
-	struct fsm_state *new;
-	struct fsm_state *s;
+	fsm_state_t new, s;
 
 	assert(fsm != NULL);
 	assert(predicate != NULL);
@@ -44,8 +48,7 @@ fsm_complete(struct fsm *fsm,
 	 * to itself. That error state is implicit in most FSMs, but rarely
 	 * actually drawn. The idea here is to explicitly create it.
 	 */
-	new = fsm_addstate(fsm);
-	if (new == NULL) {
+	if (!fsm_addstate(fsm, &new)) {
 		return 0;
 	}
 
@@ -54,18 +57,25 @@ fsm_complete(struct fsm *fsm,
 		return 0;
 	}
 
-	for (s = fsm->sl; s != NULL; s = s->next) {
-		unsigned i;
+	for (s = 0; s < fsm->statecount; s++) {
+		struct fsm_edge e;
+		struct edge_iter jt;
+		struct bm bm;
+		int i;
 
 		if (!predicate(fsm, s)) {
 			continue;
 		}
 
-		for (i = 0; i <= UCHAR_MAX; i++) {
-			if (fsm_hasedge_literal(s, i)) {
-				continue;
-			}
+		bm_clear(&bm);
 
+		for (edge_set_reset(fsm->states[s].edges, &jt); edge_set_next(&jt, &e); ) {
+			bm_set(&bm, e.symbol);
+		}
+
+		/* TODO: bulk add symbols as the inverse of this bitmap */
+		i = -1;
+		while (i = bm_next(&bm, i, 0), i <= UCHAR_MAX) {
 			if (!fsm_addedge_literal(fsm, s, new, i)) {
 				/* TODO: free stuff */
 				return 0;

@@ -251,23 +251,19 @@ lang_exclude(const char *name)
 }
 
 static void
-carryopaque(const struct fsm_state **set, size_t n,
-	struct fsm *fsm, struct fsm_state *state)
+carryopaque(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
+	struct fsm *dst_fsm, fsm_state_t dst_state)
 {
 	struct mapping_set *conflict;
 	struct ast_mapping *m;
 	size_t i;
 
-	assert(set != NULL); /* TODO: right? */
-	assert(n > 0); /* TODO: right? */
-	assert(fsm != NULL);
-	assert(state != NULL);
-
-	if (!fsm_isend(fsm, state)) {
-		return;
-	}
-
-	assert(fsm_getopaque(fsm, state) == NULL);
+	assert(src_fsm != NULL);
+	assert(src_set != NULL);
+	assert(n > 0);
+	assert(dst_fsm != NULL);
+	assert(fsm_isend(dst_fsm, dst_state));
+	assert(fsm_getopaque(dst_fsm, dst_state) == NULL);
 
 	/*
 	 * Here we mark newly-created DFA states with the same AST mapping
@@ -283,8 +279,8 @@ carryopaque(const struct fsm_state **set, size_t n,
 	m = NULL;
 
 	for (i = 0; i < n; i++) {
-		if (fsm_isend(fsm, set[i])) {
-			m = fsm_getopaque(fsm, set[i]);
+		if (fsm_isend(src_fsm, src_set[i])) {
+			m = fsm_getopaque(src_fsm, src_set[i]);
 			break;
 		}
 	}
@@ -296,13 +292,17 @@ carryopaque(const struct fsm_state **set, size_t n,
 	for (i = 0; i < n; i++) {
 		struct ast_mapping *p;
 
-		if (!fsm_isend(fsm, set[i])) {
+		/*
+		 * The opaque data is attached to end states only, so we skip
+		 * non-end states here.
+		 */
+		if (!fsm_isend(src_fsm, src_set[i])) {
 			continue;
 		}
 
-		assert(fsm_getopaque(fsm, set[i]) != NULL);
+		assert(fsm_getopaque(src_fsm, src_set[i]) != NULL);
 
-		p = fsm_getopaque(fsm, set[i]);
+		p = fsm_getopaque(src_fsm, src_set[i]);
 
 		if (m->to == p->to && m->token == p->token) {
 			continue;
@@ -338,7 +338,7 @@ carryopaque(const struct fsm_state **set, size_t n,
 	if (conflict == NULL) {
 		assert(m->conflict == NULL);
 
-		fsm_setopaque(fsm, state, m);
+		fsm_setopaque(dst_fsm, dst_state, m);
 	} else {
 		struct ast_mapping *new;
 
@@ -354,7 +354,7 @@ carryopaque(const struct fsm_state **set, size_t n,
 		new->next     = NULL;
 		new->conflict = conflict; /* private to this DFA state */
 
-		fsm_setopaque(fsm, state, new);
+		fsm_setopaque(dst_fsm, dst_state, new);
 	}
 
 	return;
@@ -363,7 +363,7 @@ error:
 
 	/* XXX: free conflict set */
 
-	fsm_setopaque(fsm, state, NULL);
+	fsm_setopaque(dst_fsm, dst_state, NULL);
 
 	return;
 }
@@ -422,14 +422,14 @@ zone_equal(const struct ast_zone *a, const struct ast_zone *b)
 
 	{
 		const struct ast_mapping *m;
-		const struct fsm_state *s;
+		fsm_state_t i;
 
-		for (s = q->sl; s != NULL; s = s->next) {
-			if (!fsm_isend(q, s)) {
+		for (i = 0; i < q->statecount; i++) {
+			if (!fsm_isend(q, i)) {
 				continue;
 			}
 
-			m = fsm_getopaque(q, s);
+			m = fsm_getopaque(q, i);
 			assert(m != NULL);
 
 			if (m->conflict != NULL) {
@@ -451,7 +451,7 @@ zone_minimise(void *arg)
 	for (;;) {
 		struct ast_zone    *z;
 		struct ast_mapping *m;
-		struct fsm_state *start;
+		fsm_state_t start;
 
 		pthread_mutex_lock(&zmtx);
 		{
@@ -480,8 +480,7 @@ zone_minimise(void *arg)
 			return "fsm_new";
 		}
 
-		start = fsm_addstate(z->fsm);
-		if (start == NULL) {
+		if (!fsm_addstate(z->fsm, &start)) {
 			pthread_mutex_lock(&zmtx);
 			zerror = errno;
 			pthread_mutex_unlock(&zmtx);
@@ -489,11 +488,18 @@ zone_minimise(void *arg)
 		}
 
 		for (m = z->ml; m != NULL; m = m->next) {
-			struct fsm_state *ms;
+			fsm_state_t ms;
+			fsm_state_t base_z, base_m;
 
 			assert(m->fsm != NULL);
 
 			if (!keep_nfa) {
+				if (!fsm_determinise(m->fsm)) {
+					pthread_mutex_lock(&zmtx);
+					zerror = errno;
+					pthread_mutex_unlock(&zmtx);
+					return "fsm_minimise";
+				}
 				if (!fsm_minimise(m->fsm)) {
 					pthread_mutex_lock(&zmtx);
 					zerror = errno;
@@ -505,9 +511,9 @@ zone_minimise(void *arg)
 			/* Attach this mapping to each end state for this FSM */
 			fsm_setendopaque(m->fsm, m);
 
-			ms = fsm_getstart(m->fsm);
+			(void) fsm_getstart(m->fsm, &ms);
 
-			z->fsm = fsm_merge(z->fsm, m->fsm);
+			z->fsm = fsm_merge(z->fsm, m->fsm, &base_z, &base_m);
 			if (z->fsm == NULL) {
 				pthread_mutex_lock(&zmtx);
 				zerror = errno;
@@ -518,6 +524,9 @@ zone_minimise(void *arg)
 #ifndef NDEBUG
 			m->fsm = NULL;
 #endif
+
+			ms    += base_m;
+			start += base_z;
 
 			if (!fsm_addedge_epsilon(z->fsm, start, ms)) {
 				pthread_mutex_lock(&zmtx);
@@ -815,8 +824,8 @@ main(int argc, char *argv[])
 				}
 
 				for (p = &z->next; *p != NULL; p = &(*p)->next) {
-					struct fsm_state *s;
 					struct ast_zone *q;
+					fsm_state_t i;
 					int r;
 
 					r = zone_equal(z, *p);
@@ -830,15 +839,15 @@ main(int argc, char *argv[])
 					}
 
 					for (q = ast->zl; q != NULL; q = q->next) {
-						for (s = q->fsm->sl; s != NULL; s = s->next) {
+						for (i = 0; i < q->fsm->statecount; i++) {
 							struct ast_mapping *m;
 
-							if (!fsm_isend(q->fsm, s)) {
+							if (!fsm_isend(q->fsm, i)) {
 								continue;
 							}
 
-							assert(s->opaque != NULL);
-							m = s->opaque;
+							m = fsm_getopaque(q->fsm, i);
+							assert(m != NULL);
 
 							if (m->to == *p) {
 								m->to = z;
@@ -881,9 +890,9 @@ main(int argc, char *argv[])
 	 */
 	if (print != lx_print_h) {
 		struct ast_zone  *z;
-		struct fsm_state *s;
-		int e;
 		unsigned int zn;
+		fsm_state_t i;
+		int e;
 
 		if (print_progress) {
 			fprintf(stderr, "-- semantic checks:");
@@ -901,6 +910,8 @@ main(int argc, char *argv[])
 		e = 0;
 
 		for (z = ast->zl; z != NULL; z = z->next) {
+			fsm_state_t start;
+
 			assert(z->fsm != NULL);
 			assert(z->ml  != NULL);
 
@@ -911,28 +922,30 @@ main(int argc, char *argv[])
 				zn++;
 			}
 
-			if (fsm_isend(z->fsm, z->fsm->start)) {
+			(void) fsm_getstart(z->fsm, &start);
+
+			if (fsm_isend(z->fsm, start)) {
 				fprintf(stderr, "start state accepts\n"); /* TODO */
 				e = 1;
 			}
 
 			/* pick up conflicts flagged by carryopaque() */
-			for (s = z->fsm->sl; s != NULL; s = s->next) {
+			for (i = 0; i < z->fsm->statecount; i++) {
 				struct ast_mapping *m;
 
-				if (!fsm_isend(z->fsm, s)) {
+				if (!fsm_isend(z->fsm, i)) {
 					continue;
 				}
 
-				assert(s->opaque != NULL);
-				m = s->opaque;
+				m = fsm_getopaque(z->fsm, i);
+				assert(m != NULL);
 
 				if (m->conflict != NULL) {
 					struct mapping_set *p;
 					char buf[50]; /* 50 looks reasonable for an on-screen limit */
 					int n;
 
-					n = fsm_example(z->fsm, s, buf, sizeof buf);
+					n = fsm_example(z->fsm, i, buf, sizeof buf);
 					if (-1 == n) {
 						perror("fsm_example");
 						return EXIT_FAILURE;
@@ -995,17 +1008,16 @@ main(int argc, char *argv[])
 	if (!keep_nfa && print != lx_print_h) {
 		struct ast_zone *z;
 		struct ast_mapping *m;
-		const struct fsm_state *s;
+		fsm_state_t i;
 
 		for (z = ast->zl; z != NULL; z = z->next) {
-			for (s = z->fsm->sl; s != NULL; s = s->next) {
-				if (!fsm_isend(z->fsm, s)) {
+			for (i = 0; i < z->fsm->statecount; i++) {
+				if (!fsm_isend(z->fsm, i)) {
 					continue;
 				}
 
-				if (s->opaque != NULL) {
-					m = s->opaque;
-
+				m = fsm_getopaque(z->fsm, i);
+				if (m != NULL) {
 					assert(m->fsm == NULL);
 
 					/* TODO: free m->conflict, allocated in carryopaque */

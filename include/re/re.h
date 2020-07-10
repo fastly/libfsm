@@ -63,10 +63,9 @@ enum re_errno {
 	RE_EBADDIALECT  =  2 | RE_MISC,
 	RE_EBADGROUP    =  3 | RE_MISC,
 
-	RE_EOVERLAP     =  0 | RE_MARK | RE_GROUP,
-	RE_ENEGRANGE    =  1 | RE_MARK | RE_GROUP,
-	RE_ENEGCOUNT    =  2 | RE_MARK | RE_GROUP,
-	RE_EDISTINCT    =  3 | RE_MARK | RE_GROUP,
+	RE_ENEGRANGE    =  0 | RE_MARK | RE_GROUP,
+	RE_ENEGCOUNT    =  1 | RE_MARK | RE_GROUP,
+	RE_EDISTINCT    =  2 | RE_MARK | RE_GROUP,
 
 	RE_EHEXRANGE    =  0 | RE_MARK | RE_ESC,
 	RE_EOCTRANGE    =  1 | RE_MARK | RE_ESC,
@@ -77,16 +76,16 @@ enum re_errno {
 	RE_EXGROUP      =  2 | RE_MARK,
 	RE_EXATOM       =  3 | RE_MARK,
 	RE_EXCOUNT      =  4 | RE_MARK,
-	RE_EXATOMS      =  5 | RE_MARK,
-	RE_EXALTS       =  6 | RE_MARK,
-	RE_EXRANGE      =  7 | RE_MARK,
-	RE_EXCLOSEGROUP =  8 | RE_MARK,
-	RE_EXGROUPBODY  =  9 | RE_MARK,
-	RE_EXEOF        = 10 | RE_MARK,
-	RE_EXESC        = 11 | RE_MARK,
-	RE_EFLAG        = 12 | RE_MARK,
-	RE_EXCLOSEFLAGS = 13 | RE_MARK,
-	RE_EXUNSUPPORTD = 14 | RE_MARK
+	RE_EXALTS       =  5 | RE_MARK,
+	RE_EXRANGE      =  6 | RE_MARK,
+	RE_EXCLOSEGROUP =  7 | RE_MARK,
+	RE_EXGROUPBODY  =  8 | RE_MARK,
+	RE_EXEOF        =  9 | RE_MARK,
+	RE_EXESC        = 10 | RE_MARK,
+	RE_EFLAG        = 11 | RE_MARK,
+	RE_EXCLOSEFLAGS = 12 | RE_MARK,
+	RE_EXUNSUPPORTD = 13 | RE_MARK,
+	RE_EBADCP       = 14 | RE_MARK
 };
 
 struct re_pos {
@@ -98,6 +97,8 @@ struct re_err {
 	struct re_pos start;
 	struct re_pos end;
 
+	/* XXX: these should be a union */
+
 	/* populated for RE_ECOUNTRANGE; ignored otherwise */
 	unsigned m;
 	unsigned n;
@@ -107,7 +108,9 @@ struct re_err {
 
 	/* populated for RE_GROUP; ignored otherwise */
 	char set[128];
-	char dup[128];
+
+	/* populated for RE_EBADCP; ignored otherwise */
+	unsigned long cp;
 };
 
 /*

@@ -7,64 +7,63 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include <fsm/fsm.h>
+
 #include <adt/set.h>
 #include <adt/stateset.h>
 #include <adt/edgeset.h>
 
-#include <fsm/fsm.h>
-
 #include "internal.h"
 
-struct fsm_state *
-fsm_mergestates(struct fsm *fsm, struct fsm_state *a, struct fsm_state *b)
+int
+fsm_mergestates(struct fsm *fsm, fsm_state_t a, fsm_state_t b,
+	fsm_state_t *q)
 {
-	struct fsm_edge *e;
-	struct fsm_state *s;
+	struct fsm_edge e;
 	struct edge_iter it;
+	fsm_state_t i;
+
+	assert(fsm != NULL);
+	assert(a < fsm->statecount);
+	assert(b < fsm->statecount);
 
 	/* edges from b */
-	{
-		struct state_iter jt;
-
-		for (s = state_set_first(b->epsilons, &jt); s != NULL; s = state_set_next(&jt)) {
-			if (!fsm_addedge_epsilon(fsm, a, s)) {
-				return NULL;
-			}
-		}
+	if (!state_set_copy(&fsm->states[a].epsilons, fsm->opt->alloc, fsm->states[b].epsilons)) {
+		return 0;
 	}
-	for (e = edge_set_first(b->edges, &it); e != NULL; e = edge_set_next(&it)) {
-		struct state_iter jt;
-
-		for (s = state_set_first(e->sl, &jt); s != NULL; s = state_set_next(&jt)) {
-			if (!fsm_addedge_literal(fsm, a, s, e->symbol)) {
-				return NULL;
-			}
-		}
+	if (!edge_set_copy(&fsm->states[a].edges, fsm->opt->alloc, fsm->states[b].edges)) {
+		return 0;
 	}
 
 	/* edges to b */
-	for (s = fsm->sl; s != NULL; s = s->next) {
-		if (state_set_contains(s->epsilons, b)) {
-			state_set_remove(s->epsilons, b);
+	for (i = 0; i < fsm->statecount; i++) {
+		if (state_set_contains(fsm->states[i].epsilons, b)) {
+			state_set_remove(&fsm->states[i].epsilons, b);
 
-			if (!fsm_addedge_epsilon(fsm, s, a)) {
-				return NULL;
+			if (!fsm_addedge_epsilon(fsm, i, a)) {
+				return 0;
 			}
 		}
 
-		for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
-			state_set_remove(e->sl, b);
+		for (edge_set_reset(fsm->states[i].edges, &it); edge_set_next(&it, &e); ) {
+			if (e.state != b) {
+				continue;
+			}
 
-			if (state_set_contains(e->sl, b)) {
-				if (!fsm_addedge_literal(fsm, s, a, e->symbol)) {
-					return NULL;
-				}
+			if (!fsm_addedge_literal(fsm, i, a, e.symbol)) {
+				return 0;
 			}
 		}
+
+		edge_set_remove_state(&fsm->states[i].edges, b);
 	}
 
 	fsm_removestate(fsm, b);
 
-	return a;
+	if (q != NULL) {
+		*q = a;
+	}
+
+	return 1;
 }
 

@@ -1,0 +1,14 @@
+#
+# Copyright 2019 Katherine Flavel
+#
+# See LICENCE for the full copyright terms.
+#
+
+# /^[^\x00-\xff]^b$/ should produce a tombstone node for the character class,
+# meaning the second ^ anchor is not visible to the start of text. Thus the
+# expression as a whole is unsatisfiable.
+
+0 -> 1 'b';
+
+start: 0;
+

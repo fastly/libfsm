@@ -7,12 +7,12 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include <fsm/fsm.h>
+#include <fsm/pred.h>
+
 #include <adt/set.h>
 #include <adt/stateset.h>
 #include <adt/edgeset.h>
-
-#include <fsm/fsm.h>
-#include <fsm/pred.h>
 
 #include "internal.h"
 
@@ -20,6 +20,7 @@ struct fsm *
 fsm_clone(const struct fsm *fsm)
 {
 	struct fsm *new;
+	size_t i;
 
 	assert(fsm != NULL);
 	assert(fsm->opt != NULL);
@@ -29,72 +30,35 @@ fsm_clone(const struct fsm *fsm)
 		return NULL;
 	}
 
-	/*
-	 * Create states corresponding to the origional FSM's states.
-	 * These are created in reverse order, but that's okay.
-	 */
-	/* TODO: possibly centralise as a state-cloning function */
-	{
-		struct fsm_state *s;
+	if (!fsm_addstate_bulk(new, fsm->statecount)) {
+		fsm_free(new);
+		return NULL;
+	}
 
-		for (s = fsm->sl; s != NULL; s = s->next) {
-			struct fsm_state *q;
+	for (i = 0; i < fsm->statecount; i++) {
+		if (fsm_isend(fsm, i)) {
+			fsm_setend(new, i, 1);
+		}
+		new->states[i].opaque = fsm->states[i].opaque;
 
-			q = fsm_addstate(new);
-			if (q == NULL) {
-				fsm_free(new);
-				return NULL;
-			}
+		if (!state_set_copy(&new->states[i].epsilons, new->opt->alloc, fsm->states[i].epsilons)) {
+			fsm_free(new);
+			return NULL;
+		}
 
-			s->tmp.equiv = q;
+		if (!edge_set_copy(&new->states[i].edges, new->opt->alloc, fsm->states[i].edges)) {
+			fsm_free(new);
+			return NULL;
 		}
 	}
 
 	{
-		struct fsm_state *s;
+		fsm_state_t start;
 
-		for (s = fsm->sl; s != NULL; s = s->next) {
-			struct fsm_edge *e;
-			struct edge_iter it;
-
-			assert(s->tmp.equiv != NULL);
-
-			if (*fsm->tail == s) {
-				new->tail = &s->tmp.equiv;
-			}
-
-			fsm_setend(new, s->tmp.equiv, fsm_isend(fsm, s));
-			s->tmp.equiv->opaque = s->opaque;
-
-			{
-				struct state_iter jt;
-				struct fsm_state *to;
-
-				for (to = state_set_first(s->epsilons, &jt); to != NULL; to = state_set_next(&jt)) {
-					if (!fsm_addedge_epsilon(new, s->tmp.equiv, to->tmp.equiv)) {
-						fsm_free(new);
-						return NULL;
-					}
-				}
-			}
-
-			for (e = edge_set_first(s->edges, &it); e != NULL; e = edge_set_next(&it)) {
-				struct state_iter jt;
-				struct fsm_state *to;
-
-				for (to = state_set_first(e->sl, &jt); to != NULL; to = state_set_next(&jt)) {
-					if (!fsm_addedge_literal(new, s->tmp.equiv, to->tmp.equiv, e->symbol)) {
-						fsm_free(new);
-						return NULL;
-					}
-				}
-			}
+		if (fsm_getstart(fsm, &start)) {
+			fsm_setstart(new, start);
 		}
 	}
-
-	new->start = fsm->start->tmp.equiv;
-
-	fsm_clear_tmp(new);
 
 	return new;
 }

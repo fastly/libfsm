@@ -4,76 +4,65 @@
  * See LICENCE for the full copyright terms.
  */
 
-#include "../../re_char_class.h"
+#include <assert.h>
+#include <string.h>
+#include <stddef.h>
 
-/* While this could be done via the lexer, doing it here
- * greatly reduces the surface area of the types we need to
- * declare in the parser. */
 #include "../../class.h"
+#include "../../class_lookup.h"
 
-struct pairs {
-	const char *s;
-	char_class_constructor_fun *ctor;
+/*
+ * While this could be done via the lexer, doing it here
+ * greatly reduces the surface area of the types we need to
+ * declare in the parser.
+ */
+
+static const struct {
+	const char *name;
+	const struct class *class;
+} classes[] = {
+	{ "\\d", &class_digit     },
+	{ "\\h", &class_hspace_pcre },
+	{ "\\s", &class_space     },
+	{ "\\v", &class_vspace_pcre },
+	{ "\\w", &class_word      },
+
+	{ "\\D", &class_notdigit  }, /* [^\d] */
+	{ "\\H", &class_nothspace_pcre }, /* [^\h] */
+	{ "\\S", &class_notspace  }, /* [^\s] */
+	{ "\\V", &class_notvspace_pcre }, /* [^\v] */
+	{ "\\W", &class_notword   }, /* [^\w] */
+	{ "\\N", &class_notnl     }, /* [^\n] */
+
+	{ "[:alnum:]",  &class_alnum  },
+	{ "[:alpha:]",  &class_alpha  },
+	{ "[:ascii:]",  &class_ascii  },
+	{ "[:blank:]",  &class_hspace },  /* space or tab only, not the same as \h */
+	{ "[:cntrl:]",  &class_cntrl  },
+	{ "[:digit:]",  &class_digit  },
+	{ "[:graph:]",  &class_graph  },
+	{ "[:lower:]",  &class_lower  },
+	{ "[:print:]",  &class_print  },
+	{ "[:punct:]",  &class_punct  },
+	{ "[:space:]",  &class_space  },
+	{ "[:upper:]",  &class_upper  },
+	{ "[:word:]",   &class_word   },
+	{ "[:xdigit:]", &class_xdigit },
 };
-static const struct pairs class_table[] = {
-	{ "alnum", class_alnum_fsm },
-	{ "alpha", class_alpha_fsm },
-	{ "ascii", class_ascii_fsm },
-	{ "blank", class_blank_fsm },
-	{ "cntrl", class_cntrl_fsm },
-	{ "digit", class_digit_fsm },
-	{ "graph", class_graph_fsm },
-	{ "lower", class_lower_fsm },
-	{ "print", class_print_fsm },
-	{ "punct", class_punct_fsm },
-	{ "space", class_space_fsm },
-	{ "upper", class_upper_fsm },
-	{ "word", class_word_fsm },
-	{ "xdigit", class_xdigit_fsm },
-	{ NULL, NULL },
-};
-		
-static const struct pairs char_type_table[] = {
-	{ "d", class_digit_fsm },
-	{ "h", NULL },		  /* horizontal ws: [ \t] */
-	{ "s", class_space_fsm }, /* [\h\v] */
-	{ "v", NULL },		  /* vertical ws: [\x0a\x0b\x0c\x0d] */
-	{ "w", class_word_fsm },
 
-	{ "D", NULL },		/* [^\d] */
-	{ "H", NULL },		/* [^\h] */
-	{ "S", NULL },		/* [^\s] */
-	{ "V", NULL },		/* [^\v] */
-	{ "W", NULL },		/* [^\w] */
-	{ "N", NULL },		/* [^\n] */
-
-	{ NULL, NULL },
-};
-	
-
-enum re_dialect_char_class_lookup_res
-re_char_class_pcre(const char *name, char_class_constructor_fun **res)
+const struct class *
+re_class_pcre(const char *name)
 {
-	const struct pairs *t = NULL;
 	size_t i;
-	assert(res != NULL);
+
 	assert(name != NULL);
 
-	if (name[0] == '\\') {
-		name += 1;
-		t = char_type_table;
-	} else if (0 == strncmp("[:", name, 2)) {
-		name += 2;
-		t = class_table;
-	}
-
-	for (i = 0; t && t[i].s != NULL; i++) {
-		if (0 == strncmp(t[i].s, name, strlen(t[i].s))) {
-			if (t[i].ctor == NULL) { return RE_CLASS_UNSUPPORTED; }
-			*res = t[i].ctor;
-			return RE_CLASS_FOUND;
+	for (i = 0; i < sizeof classes / sizeof *classes; i++) {
+		if (0 == strcmp(classes[i].name, name)) {
+			return classes[i].class;
 		}
 	}	
 
-	return RE_CLASS_NOT_FOUND;
+	return NULL;
 }
+
