@@ -32,7 +32,6 @@ DFLAGS.${src} += -std=c99 # XXX: for internal.h
 .endfor
 
 LEXER  += src/fsm/lexer.lx
-PARSER += src/fsm/parser.sid
 
 LX_CFLAGS.src/fsm/lexer.lx += -b dyn -g fgetc
 

@@ -27,7 +27,6 @@ DFLAGS.${src} += -pthread
 LFLAGS.lx += -lpthread
 
 LEXER  += src/lx/lexer.lx
-PARSER += src/lx/parser.sid
 
 LX_CFLAGS.src/lx/lexer.lx += -b dyn -g fgetc
 

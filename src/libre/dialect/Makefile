@@ -16,7 +16,6 @@ SRC += src/libre/dialect/${dialect}/parser.c
 SRC += src/libre/dialect/${dialect}/re_dialect_${dialect}.c
 
 LEXER  += src/libre/dialect/${dialect}/lexer.lx
-PARSER += src/libre/dialect/${dialect}/parser.sid
 
 .for lexer in ${LEXER:Msrc/libre/dialect/${dialect}/lexer.lx}
 LX_CFLAGS.${lexer} += -e lx_${dialect}_ -b dyn
@@ -40,10 +39,6 @@ DFLAGS.${src} += -I src # XXX: for internal.h
 .for src in ${SRC:Msrc/libre/dialect/${dialect}/parser.c}
 CFLAGS.${src} += -std=c99 # XXX: for ast.h
 DFLAGS.${src} += -std=c99 # XXX: for ast.h
-.endfor
-
-.for parser in ${PARSER:Msrc/libre/dialect/${dialect}/parser.sid}
-ACT.${parser} = src/libre/parser.act
 .endfor
 
 # Our inlined actions use m < n for counts, but are also called with
