@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <errno.h>
 
 #include <re/re.h>
@@ -22,7 +23,6 @@ re_strerror(enum re_errno e)
 
 	case RE_ENEGRANGE:    return "Negative group range";
 	case RE_ENEGCOUNT:    return "Negative count range";
-	case RE_EDISTINCT:    return "Identical endpoints in group range";
 
 	case RE_EHEXRANGE:    return "Hex escape out of range";
 	case RE_EOCTRANGE:    return "Octal escape out of range";
@@ -44,6 +44,7 @@ re_strerror(enum re_errno e)
 	case RE_EXCLOSEFLAGS: return "Syntax error: flags are not closed";
 	case RE_EXUNSUPPORTD: return "Syntax error: unsupported operator";
 	case RE_EBADCP:       return "Syntax error: invalid codepoint";
+	case RE_EBADCOMMENT:  return "Syntax error: bad comment";
 	}
 
 	assert(!"unreached");

@@ -9,165 +9,518 @@
 #include <errno.h>
 
 #include <fsm/fsm.h>
+#include <fsm/pred.h>
 
-#include <adt/queue.h>
 #include <adt/set.h>
 #include <adt/edgeset.h>
 #include <adt/stateset.h>
+#include <adt/queue.h>
 
 #include "internal.h"
 
+#define DEF_EDGES_CEIL 8
+#define DEF_ENDS_CEIL 8
+
+#define NO_END_DISTANCE ((unsigned)-1)
+
+#define LOG_TRIM 0
+
+struct edge {
+	fsm_state_t from;
+	fsm_state_t to;
+};
+
+static void
+compact_shortest_end_distance(const struct fsm *fsm,
+    unsigned *sed);
+
 static int
-mark_states(struct fsm *fsm)
+grow_ends(const struct fsm_alloc *alloc, size_t *ceil, fsm_state_t **ends);
+
+static int
+save_edge(const struct fsm_alloc *alloc,
+    size_t *count, size_t *ceil, struct edge **edges,
+    fsm_state_t from, fsm_state_t to);
+
+static int
+cmp_edges_by_to(const void *pa, const void *pb)
 {
-	const unsigned state_count = fsm_countstates(fsm);
-	fsm_state_t start;
-	struct queue *q;
+	const struct edge *a = (const struct edge *)pa;
+	const struct edge *b = (const struct edge *)pb;
+
+	return a->to < b->to ? -1
+	    : a->to > b->to ? 1
+	    : a->from < b->from ? -1
+	    : a->from > b->from ? 1
+	    : 0;
+}
+
+static int
+mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
+    unsigned *sed)
+{
+	/* Use a queue to walk breath-first over all states reachable
+	 * from the start state. Note all end states. Collect all the
+	 * edges, then sort them by the note they lead to, to convert it
+	 * to a reverse edge index. Then, enqueue all the end states,
+	 * and again use the queue to walk the graph breadth-first, but
+	 * this time iterating bottom-up from the end states, and mark
+	 * all reachable states (on fsm_state.visited).
+	 *
+	 * This marks all states which are both reachable from the start
+	 * state and have a path to an end state. */
 	int res = 0;
+	fsm_state_t start, s_id;
+	struct queue *q = NULL;
+
+	struct edge *edges = NULL;
+	size_t edge_count = 0, edge_ceil = DEF_EDGES_CEIL;
+
+	fsm_state_t *ends = NULL;
+	size_t end_count = 0, end_ceil = DEF_ENDS_CEIL;
+	const size_t state_count = fsm->statecount;
+
+	size_t *offsets = NULL;
+
+	if (!fsm_getstart(fsm, &start)) {
+		return 1;	/* nothing is reachable */
+	}
 
 	q = queue_new(fsm->opt->alloc, state_count);
 	if (q == NULL) {
-		return 1;
+		goto cleanup;
 	}
 
-	if (!fsm_getstart(fsm, &start)) {
-		return 1;
+	if (LOG_TRIM > 0) {
+		fprintf(stderr, "mark_states: mode %d\n", mode);
 	}
 
+	if (mode == FSM_TRIM_START_AND_END_REACHABLE) {
+		edges = f_malloc(fsm->opt->alloc,
+		    edge_ceil * sizeof(edges[0]));
+		if (edges == NULL) {
+			goto cleanup;
+		}
+
+		ends = f_malloc(fsm->opt->alloc,
+		    end_ceil * sizeof(ends[0]));
+		if (ends == NULL) {
+			goto cleanup;
+		}
+	}
+
+	fsm->states[start].visited = 1;
 	if (!queue_push(q, start)) {
 		goto cleanup;
 	}
-	fsm->states[start].visited = 1;
+	assert(start < state_count);
 
-	for (;;) {
+	/* Breadth-first walk, mark states reachable from start and (if
+	 * checking whether states can reach end states later) also
+	 * collect edges & end states. */
+	while (queue_pop(q, &s_id)) {
+		fsm_state_t next;
 		struct fsm_edge e;
 		struct edge_iter edge_iter;
-		fsm_state_t s;
+		struct state_iter state_iter;
 
-		/* pop off queue; break if empty */
-		if (!queue_pop(q, &s)) { break; }
+		if (LOG_TRIM > 0) {
+			fprintf(stderr, "mark_states: popped %d\n", s_id);
+		}
 
-		/* enqueue all directly reachable and unmarked, and mark them */
-		{
-			struct state_iter state_iter;
-			fsm_state_t es;
+		assert(s_id < state_count);
+		assert(fsm->states[s_id].visited);
 
-			for (state_set_reset(fsm->states[s].epsilons, &state_iter); state_set_next(&state_iter, &es); ) {
-				if (fsm->states[es].visited) {
-					continue;
-				}
-
-				if (!queue_push(q, es)) {
+		if (ends && fsm_isend(fsm, s_id)) {
+			if (end_count == end_ceil) {
+				if (!grow_ends(fsm->opt->alloc,
+					&end_ceil, &ends)) {
 					goto cleanup;
 				}
+			}
+			if (LOG_TRIM > 0) {
+				fprintf(stderr, "mark_states: ends[%ld] = %d\n",
+				    end_count, s_id);
+			}
+			ends[end_count] = s_id;
+			end_count++;
+		}
 
-				fsm->states[es].visited = 1;
+		for (state_set_reset(fsm->states[s_id].epsilons, &state_iter);
+		     state_set_next(&state_iter, &next); ) {
+			assert(next < state_count);
+			if (LOG_TRIM > 0) {
+				fprintf(stderr, "mark_states: epsilon to %d, visited? %d\n",
+				    next, fsm->states[next].visited);
+			}
+
+			if (!fsm->states[next].visited) {
+				if (!queue_push(q, next)) {
+					goto cleanup;
+				}
+				fsm->states[next].visited = 1;
+			}
+
+			if (edges == NULL) {
+				continue;
+			}
+			if (!save_edge(fsm->opt->alloc,
+				&edge_count, &edge_ceil, &edges,
+				s_id, next)) {
+				goto cleanup;
 			}
 		}
 
-		for (edge_set_reset(fsm->states[s].edges, &edge_iter); edge_set_next(&edge_iter, &e); ) {
-			if (fsm->states[e.state].visited) {
+		for (edge_set_reset(fsm->states[s_id].edges, &edge_iter);
+		     edge_set_next(&edge_iter, &e); ) {
+			next = e.state;
+			if (LOG_TRIM > 0) {
+				fprintf(stderr, "mark_states: edge: 0x%x to %d, visited? %d\n",
+				    e.symbol, next, fsm->states[next].visited);
+			}
+
+			if (!fsm->states[next].visited) {
+				if (!queue_push(q, next)) {
+					goto cleanup;
+				}
+				fsm->states[next].visited = 1;
+			}
+
+			if (edges == NULL) {
 				continue;
 			}
-
-			if (!queue_push(q, e.state)) {
+			if (!save_edge(fsm->opt->alloc,
+				&edge_count, &edge_ceil, &edges,
+				s_id, next)) {
 				goto cleanup;
 			}
-
-			fsm->states[e.state].visited = 1;
 		}
 	}
 
+	if (LOG_TRIM > 0) {
+		fprintf(stderr, "mark_states: done tracking from start\n");
+	}
+
+	/* Only tracking reachability from start, so we're done. */
+	if (mode == FSM_TRIM_START_REACHABLE) {
+		queue_free(q);
+		return 1;
+	}
+
+	/* Clear mark for second pass. */
+	for (s_id = 0; s_id < state_count; s_id++) {
+		fsm->states[s_id].visited = 0;
+	}
+
+	/* Sort edges by state they lead to, inverting the index. */
+	qsort(edges, edge_count, sizeof(edges[0]), cmp_edges_by_to);
+
+	/* Reuse the existing queue for a second breadth-first walk.
+	 * This assumes the queue can be reused once empty; if the
+	 * implementation changes, it may need to reset the queue or
+	 * construct a new one.
+	 *
+	 * Initialize the queue with the end states. */
+	{
+		size_t e_i;
+		for (e_i = 0; e_i < end_count; e_i++) {
+			const fsm_state_t end_id = ends[e_i];
+			assert(end_id < state_count);
+
+			if (LOG_TRIM > 0) {
+				fprintf(stderr, "mark_states: seeding with end %d, marking visited\n",
+				    end_id);
+			}
+
+			if (!queue_push(q, end_id)) {
+				goto cleanup;
+			}
+			fsm->states[end_id].visited = 1;
+
+			/* end states have an end distance of 0 */
+			if (sed != NULL) {
+				sed[end_id] = 0;
+			}
+		}
+
+		/* The ends are no longer needed. */
+		f_free(fsm->opt->alloc, ends);
+		ends = NULL;
+	}
+
+	if (edge_count == 0) {	/* done */
+		res = 1;
+		goto cleanup;
+	}
+
+	/* Build the offset table into the edge index, so we
+	 * can map from s_id to the consecutive edges leading
+	 * to it with random access.
+	 *
+	 * offsets[s_id] contains the offset of the first edge after
+	 * s_id, so that offsets[s_id - 1] can be used as the starting
+	 * offset, or 0 when s_id is 0. Since states may not appear in
+	 * the table, any case where offsets[i] == 0 is set to
+	 * offsets[i - 1], to represent zero entries. */
+	{
+		size_t i;
+		const fsm_state_t max_to = edges[edge_count - 1].to;
+		offsets = f_calloc(fsm->opt->alloc,
+		    (max_to + 1), sizeof(offsets[0]));
+		if (offsets == NULL) {
+			goto cleanup;
+		}
+
+		for (i = 0; i < edge_count; i++) {
+			const fsm_state_t to = edges[i].to;
+			offsets[to] = i + 1;
+		}
+
+		for (i = 0; i <= max_to; i++) { /* fill in gaps */
+			if (i > 0 && offsets[i] == 0) {
+				offsets[i] = offsets[i - 1];
+			}
+
+			if (LOG_TRIM > 1) {
+				fprintf(stderr, "mark_states: offsets[%ld]: %ld\n",
+				    i, offsets[i]);
+			}
+		}
+		assert(offsets[max_to] == edge_count);
+	}
+
+	if (LOG_TRIM > 1) {
+		size_t i;
+		for (i = 0; i < edge_count; i++) {
+		fprintf(stderr, "mark_states: edges[%ld]: %d -> %d\n",
+		    i, edges[i].from, edges[i].to);
+		}
+	}
+
+	/* Walk breadth-first from ends and mark reachable states. */
+	while (queue_pop(q, &s_id)) {
+		size_t base, limit, e_i;
+		assert(fsm->states[s_id].visited);
+
+		base = (s_id == 0 ? 0 : offsets[s_id - 1]);
+		limit = offsets[s_id];
+
+		if (LOG_TRIM > 0) {
+			fprintf(stderr, "mark_states: popped %d, offsets [%ld, %ld]\n",
+			    s_id, base, limit);
+		}
+
+		for (e_i = base; e_i < limit; e_i++) {
+			const fsm_state_t from = edges[e_i].from;
+			const unsigned end_distance = (sed == NULL
+			    ? 0 : sed[s_id]);
+			assert(from < state_count);
+
+			if (LOG_TRIM > 0) {
+				fprintf(stderr, "mark_states: edges[%ld]: %d, visited? %d\n",
+				    e_i, from, fsm->states[from].visited);
+			}
+
+			/* Update the end distance -- one more step
+			 * removed from the nearest end state. */
+			if (sed != NULL) {
+				if (sed[from] == NO_END_DISTANCE
+				    || end_distance < sed[from]) {
+					sed[from] = end_distance + 1;
+				}
+			}
+
+			if (!fsm->states[from].visited) {
+				fsm->states[from].visited = 1;
+				if (!queue_push(q, from)) {
+					goto cleanup;
+				}
+			}
+		}
+	}
+
+	/* All start- and end-reachable states are now marked. */
 	res = 1;
 
 cleanup:
-
-	if (q != NULL) {
-		free(q);
-	}
+	if (edges != NULL) { f_free(fsm->opt->alloc, edges); }
+	if (ends != NULL) { f_free(fsm->opt->alloc, ends); }
+	if (offsets != NULL) { f_free(fsm->opt->alloc, offsets); }
+	if (q != NULL) { queue_free(q); }
 
 	return res;
+}
+
+static int
+grow_ends(const struct fsm_alloc *alloc, size_t *ceil, fsm_state_t **ends)
+{
+	const size_t nceil = 2 * (*ceil);
+	fsm_state_t *nends = f_realloc(alloc,
+	    *ends, nceil * sizeof((*ends)[0]));
+	if (nends == NULL) {
+		return 0;
+	}
+	*ceil = nceil;
+	*ends = nends;
+	return 1;
+}
+
+static int
+save_edge(const struct fsm_alloc *alloc,
+    size_t *count, size_t *ceil, struct edge **edges,
+    fsm_state_t from, fsm_state_t to)
+{
+	struct edge *e;
+	if (*count == *ceil) {
+		const size_t nceil = 2 * (*ceil);
+		struct edge *nedges = f_realloc(alloc,
+		    *edges, nceil * sizeof((*edges)[0]));
+		if (nedges == NULL) {
+			return 0;
+		}
+		*ceil = nceil;
+		*edges = nedges;
+	}
+
+	if (LOG_TRIM > 0) {
+		fprintf(stderr, "save_edge: %d -> %d\n",
+		    from, to);
+	}
+
+	e = &(*edges)[*count];
+	e->from = from;
+	e->to = to;
+	(*count)++;
+	return 1;
+}
+
+static int
+marks_filter_cb(fsm_state_t id, void *opaque)
+{
+	const struct fsm *fsm = opaque;
+	assert(id < fsm->statecount);
+	return fsm->states[id].visited;
 }
 
 long
 sweep_states(struct fsm *fsm)
 {
-	long swept;
-	fsm_state_t i;
-
-	swept = 0;
+	size_t swept;
 
 	assert(fsm != NULL);
 
-	/*
-	 * This could be made faster by not using fsm_removestate (which does the
-	 * work of also removing transitions from other states to the state being
-	 * removed). We could get away with removing just our candidate state
-	 * without removing transitions to it, because any state being removed here
-	 * should (by definition) not be the start, or have any other reachable
-	 * edges referring to it.
-	 *
-	 * There may temporarily be other states in the graph with other edges
-	 * to it, because the states aren't topologically sorted, but
-	 * they'll be collected soon as well.
-	 *
-	 * XXX: For now we call fsm_removestate() for simplicity of implementation.
-	 */
-	i = 0;
-	while (i < fsm->statecount) {
-		if (fsm->states[i].visited) {
-			i++;
-			continue;
+	if (LOG_TRIM > 1) {
+		size_t i;
+		for (i = 0; i < fsm->statecount; i++) {
+			fprintf(stderr, "sweep_states: state[%ld]: visited? %d\n",
+			    i, fsm->states[i].visited);
 		}
-
-		/*
-		 * This state cannot contain transitions pointing to earlier
-		 * states, because they have already been removed. So we know
-		 * the current index may not decrease.
-		 */
-		fsm_removestate(fsm, i);
-		swept++;
 	}
 
-	return swept;
-}
-
-int
-fsm_trim(struct fsm *fsm)
-{
-	long ret;
-	fsm_state_t i;
-
-	assert(fsm != NULL);
-
-	for (i = 0; i < fsm->statecount; i++) {
-		fsm->states[i].visited = 0;
-	}
-
-	if (!mark_states(fsm)) {
+	if (!fsm_compact_states(fsm, marks_filter_cb, fsm, &swept)) {
 		return -1;
 	}
 
-	/*
-	 * Remove all states which have no reachable end state henceforth.
-	 * These are a trailing suffix which will never accept.
-	 *
-	 * It doesn't matter which order in which these are removed;
-	 * removing a state in the middle will disconnect the remainer of
-	 * the suffix. The nodes in that newly disjoint subgraph
-	 * will still be found to have no reachable end state, and so are
-	 * also removed.
-	 */
+	return (long)swept;
+}
+
+long
+fsm_trim(struct fsm *fsm, enum fsm_trim_mode mode,
+	unsigned **shortest_end_distance)
+{
+	long ret;
+	unsigned char *marks = NULL;
+	unsigned *sed = NULL;
+
+	fsm_state_t i;
+	assert(fsm != NULL);
+
+	if (shortest_end_distance != NULL
+		&& mode == FSM_TRIM_START_AND_END_REACHABLE) {
+		size_t s_i;
+		sed = f_malloc(fsm->opt->alloc,
+		    fsm->statecount * sizeof(sed[0]));
+		if (sed == NULL) {
+			goto cleanup;
+		}
+		for (s_i = 0; s_i < fsm->statecount; s_i++) {
+			sed[s_i] = NO_END_DISTANCE;
+		}
+	}
+
+	if (!mark_states(fsm, mode, sed)) {
+		goto cleanup;
+	}
+
+	if (sed != NULL) {
+		compact_shortest_end_distance(fsm, sed);
+	}
 
 	/*
+	 * Remove all states which are unreachable from the start state
+	 * or have no path to an end state. These are a trailing suffix
+	 * which will never accept.
+	 *
 	 * sweep_states returns a negative value on error, otherwise it returns
 	 * the number of states swept.
 	 */
 	ret = sweep_states(fsm);
+	if (LOG_TRIM > 0) {
+		fprintf(stderr, "sweep_states: returned %ld\n", ret);
+	}
+
+	/* Clear the marks on remaining states, since .visited is
+	 * only meaningful within a single operation. */
+	for (i = 0; i < fsm->statecount; i++) {
+		fsm->states[i].visited = 0;
+	}
+
 	if (ret < 0) {
+		if (sed != NULL) {
+			f_free(fsm->opt->alloc, sed);
+		}
 		return ret;
 	}
-	
-	return 1;
+
+	if (sed != NULL) {
+		assert(shortest_end_distance != NULL);
+		*shortest_end_distance = sed;
+	}
+
+	return ret;
+
+cleanup:
+	if (marks != NULL) {
+		f_free(fsm->opt->alloc, marks);
+	}
+	if (sed != NULL) {
+		f_free(fsm->opt->alloc, sed);
+	}
+	return -1;
 }
 
+/* Since fsm is about to be compacted (several states will
+ * be trimmed away), compact the corresponding end depths
+ * so that sed[i] will correspond to fsm->states[i] after
+ * trimming completes. */
+static void
+compact_shortest_end_distance(const struct fsm *fsm,
+    unsigned *sed)
+{
+	size_t dst = 0, src;
+
+	for (src = 0; src < fsm->statecount; src++) {
+		if (fsm->states[src].visited) {
+			if (dst < src) {
+				sed[dst] = sed[src];
+			}
+			dst++;
+		} else {
+			assert(sed[src] == NO_END_DISTANCE);
+		}
+	}
+
+	/* Anything after sed[dst] is now garbage. If dst is
+	 * significantly less than fsm->statecount, we could
+	 * realloc to shrink it here. */
+}

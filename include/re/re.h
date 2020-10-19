@@ -65,7 +65,6 @@ enum re_errno {
 
 	RE_ENEGRANGE    =  0 | RE_MARK | RE_GROUP,
 	RE_ENEGCOUNT    =  1 | RE_MARK | RE_GROUP,
-	RE_EDISTINCT    =  2 | RE_MARK | RE_GROUP,
 
 	RE_EHEXRANGE    =  0 | RE_MARK | RE_ESC,
 	RE_EOCTRANGE    =  1 | RE_MARK | RE_ESC,
@@ -85,7 +84,8 @@ enum re_errno {
 	RE_EFLAG        = 11 | RE_MARK,
 	RE_EXCLOSEFLAGS = 12 | RE_MARK,
 	RE_EXUNSUPPORTD = 13 | RE_MARK,
-	RE_EBADCP       = 14 | RE_MARK
+	RE_EBADCP       = 14 | RE_MARK,
+	RE_EBADCOMMENT  = 15 | RE_MARK
 };
 
 struct re_pos {
@@ -158,12 +158,15 @@ const char *
 re_strerror(enum re_errno e);
 
 /*
- * Format an error to stderr.
+ * Format an error to a file.
+ * re_perror() is equivalent to re_ferror(stderr, ...)
  */
+void
+re_ferror(FILE *f, enum re_dialect dialect, const struct re_err *err,
+	const char *file, const char *s);
 void
 re_perror(enum re_dialect dialect, const struct re_err *err,
 	const char *file, const char *s);
-
 
 /* TODO: a convenience interface in the spirit of strtol() which parses between delimiters (and escapes accordingly) */
 

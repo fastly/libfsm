@@ -44,6 +44,9 @@ hashset_contains(const struct hashset *set, const void *item)
 int main(void) {
 	struct hashset *s = hashset_create(NULL, hash_int, cmp_int);
 	int a = 1;
+
+	assert(s != NULL);
+
 	assert(hashset_add(s, &a));
 	assert(hashset_add(s, &a));
 	assert(hashset_add(s, &a));
@@ -52,6 +55,7 @@ int main(void) {
 
 	assert(!hashset_contains(s, &a));
 
+	hashset_free(s);
 	return 0;
 }
 

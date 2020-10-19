@@ -41,20 +41,20 @@
 	START;
 	END;
 
-	OPENSUB; OPENCAPTURE; CLOSE;
+	OPEN; CLOSE;
 	OPENGROUP: () -> (:pos, :pos); CLOSEGROUP: () -> (:char, :pos, :pos);
 	OPENGROUPINV: () -> (:pos, :pos);
 	OPENGROUPCB: () -> (:pos, :pos);
 	OPENGROUPINVCB: () -> (:pos, :pos);
+	CLOSEGROUPRANGE: () -> (:char, :pos, :pos);
 	OPENCOUNT: () -> (:pos, :pos); CLOSECOUNT: () -> (:pos, :pos);
 
-	INVERT: () -> (:char);
+	!INVERT: () -> (:char);
 	RANGE:  () -> (:char, :pos, :pos);
 
 	NAMED_CLASS: () -> (:ast_class_id, :pos, :pos);
 
-	OPENFLAGS;
-	CLOSEFLAGS;
+	FLAGS; SUB;
 	NEGATE;
 	FLAG_UNKNOWN;
 	FLAG_INSENSITIVE: () -> (:re_flags);
@@ -66,6 +66,10 @@
 	HEX:     () -> (:char, :pos, :pos);
 	CHAR:    () -> (:char, :pos, :pos);
 	COUNT:   () -> (:unsigned);
+
+	UNSUPPORTED: () -> (:char, :pos, :pos);
+
+	INVALID_COMMENT;
 
 	EOF;
 	!ERROR;
@@ -86,16 +90,16 @@
 
 	<ast-range-endpoint-literal>: (:char)         -> (:endpoint);
 	<ast-range-endpoint-class>:   (:ast_class_id) -> (:endpoint);
-	!<ast-range-distinct>: (:endpoint, :pos, :endpoint, :pos) -> ();
 
 	<ast-make-empty>:        ()                       -> (:ast_expr);
 	<ast-make-literal>:      (:char)                  -> (:ast_expr);
 	<ast-make-concat>:       ()                       -> (:ast_expr);
 	<ast-make-alt>:          ()                       -> (:ast_expr);
-	<ast-make-any>:          ()                       -> (:ast_expr);
 	<ast-make-piece>:        (:ast_expr, :ast_count)  -> (:ast_expr);
 	<ast-make-group>:        (:ast_expr)              -> (:ast_expr);
-	<ast-make-re-flags>:     (:re_flags, :re_flags)   -> (:ast_expr);
+	<ast-get-re-flags>:      ()                       -> (:re_flags);
+	<ast-set-re-flags>:      (:re_flags)              -> ();
+	<ast-mask-re-flags>:     (:re_flags, :re_flags)   -> ();
 	<ast-make-anchor-start>: ()                       -> (:ast_expr);
 	<ast-make-anchor-end>:   ()                       -> (:ast_expr);
 	!<ast-make-subtract>:    (:ast_expr, :ast_expr)   -> (:ast_expr); 
@@ -106,7 +110,7 @@
 	<ast-add-concat>: (:ast_expr, :ast_expr) -> ();
 	<ast-add-alt>:    (:ast_expr, :ast_expr) -> ();
 
-	<err-expected-term>;
+	!<err-expected-term>;
 	<err-expected-count>;
 	<err-expected-atom>;
 	<err-expected-alts>;
@@ -117,11 +121,14 @@
 	<err-expected-closeflags>;
 	<err-expected-eof>;
 	<err-unsupported>;
+	<err-invalid-comment>;
 
 	<mark-group>: (:pos, :pos) -> ();
 	<mark-range>: (:pos, :pos) -> ();
 	<mark-count>: (:pos, :pos) -> ();
 	<mark-expr>: (:ast_expr, :pos, :pos) -> ();
+
+	<class-any>: () -> (:ast_class_id);
 
 	expr: () -> (node :ast_expr) [
 		literal: () -> (node :ast_expr) = {
@@ -135,18 +142,16 @@
 				(c, !, !) = HEX;
 			||
 				(c, !, !) = CHAR;
+			||
+				(c, !, !) = CONTROL;
+			||
+				(c, !, !) = UNSUPPORTED;
+				<err-unsupported>;
 			};
 			node = <ast-make-literal>(c);
 		};
 		    
 		character-class: () -> (node :ast_expr) [
-
-			class-head: (class :ast_expr &) -> () = {
-				! = INVERT;
-				&class = <ast-make-invert>(class);
-			||
-				$;
-			};
 
 			class-literal: () -> (node :ast_expr) = {
 				{
@@ -165,6 +170,7 @@
 					 * complain about unsupported things at a later stage */
 					<err-unsupported>;
 				};
+
 				node = <ast-make-literal>(c);
 	  		};
 
@@ -236,18 +242,11 @@
 			};
 
 			list-of-class-terms: (class :ast_expr) -> () = {
-				{
-					node = class-term;
-					<ast-add-alt>(class, node);
-				##
-					<err-expected-term>;
-				};
-
-				{
-					list-of-class-terms(class);
-				||
-					$;
-				};
+				node = class-term;
+				<ast-add-alt>(class, node);
+				list-of-class-terms(class);
+			||
+				$;
 			};
 
 		] = {
@@ -256,8 +255,6 @@
 
 				node = <ast-make-alt>;
 				tmp = node;
-
-				class-head(&node);
 
 				{
 					(c, rstart, !) = RANGE;
@@ -272,15 +269,11 @@
 					};
 
 					<ast-add-alt>(tmp,node1);
-
-					{
-						list-of-class-terms(tmp);
-					||
-						$;
-					};
 				||
-					list-of-class-terms(tmp);
+					$;
 				};
+
+				list-of-class-terms(tmp);
 			||
 				(start, !) = OPENGROUPINV;
 
@@ -302,16 +295,11 @@
 					};
 
 					<ast-add-alt>(tmp,node1);
-
-					{
-						list-of-class-terms(tmp);
-					||
-						$;
-					};
-
 				||
-					list-of-class-terms(tmp);
+					$;
 				};
+
+				list-of-class-terms(tmp);
 
 			||
 				(start, !) = OPENGROUPCB;
@@ -333,13 +321,7 @@
 
 				<ast-add-alt>(tmp, node1);
 
-				/* ']' literal or range is already one class
- 				 * term, so another isn't necessary */
-				{
-					list-of-class-terms(tmp);
-				||
-					$;
-				};
+				list-of-class-terms(tmp);
 			||
 				(start, !) = OPENGROUPINVCB;
 
@@ -362,17 +344,16 @@
 
 				<ast-add-alt>(tmp, node1);
 
-				/* ']' literal or range is already one class
- 				 * term, so another isn't necessary */
-				{
-					list-of-class-terms(tmp);
-				||
-					$;
-				};
+				list-of-class-terms(tmp);
 			};
 
 			{
 				(!, !, end) = CLOSEGROUP;
+				<mark-group>(start, end);
+			||
+				(crange, !, end) = CLOSEGROUPRANGE;
+				range = <ast-make-literal>(crange);
+				<ast-add-alt>(tmp, range);
 				<mark-group>(start, end);
 			##
 				<err-expected-closegroup>;
@@ -401,7 +382,7 @@
 				<err-unknown-flag>;
 			};
 		] = {
-			OPENFLAGS;
+			FLAGS;
 
 			empty_pos = <re-flag-none>;
 			empty_neg = <re-flag-none>;
@@ -420,11 +401,20 @@
 			};
 
 			{
-				CLOSEFLAGS;
-				node = <ast-make-re-flags>(pos, neg);
+				CLOSE;
+				<ast-mask-re-flags>(pos, neg);
+				node = <ast-make-empty>;
+			||
+				SUB;
+				flags = <ast-get-re-flags>();
+				<ast-mask-re-flags>(pos, neg);
+				e = expr;
+				<ast-set-re-flags>(flags);
+				CLOSE;
+				node = e;
 			##
 				<err-expected-closeflags>;
-				node = <ast-make-empty>;
+				node = <ast-make-empty>; /* appease sid */
 			};
 		};
 
@@ -445,7 +435,8 @@
 				e = <ast-make-anchor-end>;
 			||
 				ANY;
-				e = <ast-make-any>;
+				a = <class-any>;
+				e = <ast-make-named>(a);
 			||
 				e = literal;
 			||
@@ -455,21 +446,15 @@
 			||
 				e = flags;
 			||
-				(!, !, !) = CONTROL;
-				<err-unsupported>;
-				e = <ast-make-empty>; /* appease sid */
-			||
-				OPENSUB;
-				e = expr;
-				CLOSE;
-			||
-				OPENCAPTURE;
+				OPEN;
+				flags = <ast-get-re-flags>();
 				g = expr;
+				<ast-set-re-flags>(flags);
 				e = <ast-make-group>(g);
 				CLOSE;
 			##
 				<err-expected-atom>;
-				e = <ast-make-any>;
+				e = <ast-make-empty>;
 			};
 
 			count: () -> (c :ast_count) = {
@@ -513,7 +498,19 @@
 				node = <ast-make-piece>(e, c);
 
 				{
-					&node = list-of-counts(node);
+					/* repeat quantifier followed by ? indicates non-greedy matching,
+					 * which is currently unsupported
+					 * This includes: *?, {m,n}?, +?, and ??
+					 */
+					OPT;
+					<err-unsupported>;
+				||
+					/* repeat quantifier followed by + indicates "atomic" matching,
+					 * which is currently unsupported.
+					 * This includes: *+, {m,n}+, ++, and ?+
+					 */
+					PLUS;
+					<err-unsupported>;
 				||
 					$;
 				};
@@ -530,9 +527,18 @@
 			};
 		};
 
+		comment: () -> () = {
+			INVALID_COMMENT;
+			<err-invalid-comment>;
+		};
+
 		list-of-pieces: (cat :ast_expr) -> () = {
-			a = piece;
-			<ast-add-concat>(cat, a);
+			{
+				a = piece;
+				<ast-add-concat>(cat, a);
+			||
+				comment;
+			};
 
 			{
 				list-of-pieces(cat);

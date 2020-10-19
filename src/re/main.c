@@ -21,6 +21,7 @@
 #include <fsm/pred.h>
 #include <fsm/print.h>
 #include <fsm/options.h>
+#include <fsm/parser.h>
 #include <fsm/vm.h>
 
 #include <re/re.h>
@@ -29,6 +30,7 @@
 #include "libre/print.h" /* XXX */
 #include "libre/class.h" /* XXX */
 #include "libre/ast.h" /* XXX */
+#include "libre/ast_new_from_fsm.h" /* XXX */
 
 
 #define DEBUG_ESCAPES     0
@@ -53,10 +55,10 @@ static struct fsm_options opt;
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: re    [-r <dialect>] [-nbiusyz] [-x] <re> ... [ <text> | -- <text> ... ]\n");
-	fprintf(stderr, "       re    [-r <dialect>] [-nbiusyz] {-q <query>} <re> ...\n");
-	fprintf(stderr, "       re -p [-r <dialect>] [-nbiusyz] [-l <language>] [-acwX] [-k <io>] [-e <prefix>] <re> ...\n");
-	fprintf(stderr, "       re -m [-r <dialect>] [-nbiusyz] <re> ...\n");
+	fprintf(stderr, "usage: re    [-r <dialect>] [-nbiusfyz] [-x] <re> ... [ <text> | -- <text> ... ]\n");
+	fprintf(stderr, "       re    [-r <dialect>] [-nbiusfyz] {-q <query>} <re> ...\n");
+	fprintf(stderr, "       re -p [-r <dialect>] [-nbiusfyz] [-l <language>] [-acwX] [-k <io>] [-e <prefix>] <re> ...\n");
+	fprintf(stderr, "       re -m [-r <dialect>] [-nbiusfyz] <re> ...\n");
 	fprintf(stderr, "       re -h\n");
 }
 
@@ -113,6 +115,7 @@ print_name(const char *name,
 		{ "json",   fsm_print_json,   NULL },
 		{ "vmc",    fsm_print_vmc,    NULL },
 		{ "vmdot",  fsm_print_vmdot,  NULL },
+		{ "rust",   fsm_print_rust,   NULL },
 		{ "sh",     fsm_print_sh,     NULL },
 		{ "go",     fsm_print_go,     NULL },
 
@@ -248,6 +251,13 @@ xopen(const char *s)
 	return f;
 }
 
+struct matches_list {
+	struct matches_list *next;
+	struct match *head;
+};
+
+static struct matches_list *all_matches = NULL;
+
 static struct match *
 addmatch(struct match **head, int i, const char *s)
 {
@@ -288,6 +298,50 @@ addmatch(struct match **head, int i, const char *s)
 	*head     = new;
 
 	return new;
+}
+
+static void
+add_matches_list(struct match *head)
+{
+	struct matches_list *new;
+
+	if (head == NULL) {
+		return;
+	}
+
+	new = malloc(sizeof *new);
+	if (new == NULL) {
+		perror("allocating matches list");
+		abort();
+	}
+
+	new->next = all_matches;
+	new->head = head;
+	all_matches = new;
+}
+
+static void
+free_all_matches(void)
+{
+	struct matches_list *clst;
+	struct matches_list *nlst;
+
+	for (clst = all_matches; clst != NULL; clst = nlst) {
+		struct match *curr;
+		struct match *next;
+
+		nlst = clst->next;
+
+		for (curr = clst->head; curr != NULL; curr = next) {
+			next = curr->next;
+
+			free(curr);
+		}
+
+		free(clst);
+	}
+
+	all_matches = NULL;
 }
 
 static void
@@ -335,6 +389,7 @@ carryopaque(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
 		}
 	}
 
+	add_matches_list(matches);
 	fsm_setopaque(dst_fsm, dst_state, matches);
 
 	return;
@@ -475,6 +530,19 @@ endleaf_json(FILE *f, const void *state_opaque, const void *endleaf_opaque)
 	return 0;
 }
 
+static struct fsm *fsm_to_cleanup = NULL;
+
+static void
+do_fsm_cleanup(void)
+{
+	if (fsm_to_cleanup != NULL) {
+		fsm_free(fsm_to_cleanup);
+		fsm_to_cleanup = NULL;
+	}
+
+	free_all_matches();
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -486,6 +554,7 @@ main(int argc, char *argv[])
 	struct fsm *fsm;
 	enum re_flags flags;
 	int xfiles, yfiles;
+	int fsmfiles;
 	int example;
 	int keep_nfa;
 	int patterns;
@@ -493,6 +562,8 @@ main(int argc, char *argv[])
 	int makevm;
 
 	struct fsm_dfavm *vm;
+
+	atexit(do_fsm_cleanup);
 
 	/* note these defaults are the opposite than for fsm(1) */
 	opt.anonymous_states  = 1;
@@ -502,6 +573,7 @@ main(int argc, char *argv[])
 	opt.io                = FSM_IO_GETC;
 
 	flags     = 0U;
+	fsmfiles  = 0;
 	xfiles    = 0;
 	yfiles    = 0;
 	example   = 0;
@@ -519,7 +591,7 @@ main(int argc, char *argv[])
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:" "upMmnxyz"), c != -1) {
+		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:" "upMmnfxyz"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 0;          break;
 			case 'c': opt.consolidate_edges = 0;          break;
@@ -544,6 +616,7 @@ main(int argc, char *argv[])
 			case 'r': dialect   = dialect_name(optarg); break;
 
 			case 'u': ambig    = 1; break;
+			case 'f': fsmfiles = 1; break;
 			case 'x': xfiles   = 1; break;
 			case 'y': yfiles   = 1; break;
 			case 'm': example  = 1; break;
@@ -614,12 +687,31 @@ main(int argc, char *argv[])
 			return EXIT_FAILURE;
 		}
 
-		if (yfiles) {
+		if (fsmfiles || yfiles) {
 			FILE *f;
 
 			f = xopen(argv[0]);
 
-			ast = re_parse(dialect, fsm_fgetc, f, &opt, flags, &err, NULL);
+			if (!fsmfiles) {
+				ast = re_parse(dialect, fsm_fgetc, f, &opt, flags, &err, NULL);
+			} else {
+				struct fsm *fsm;
+
+				fsm = fsm_parse(f, &opt);
+				if (fsm == NULL) {
+					perror("fsm_parse");
+					return EXIT_FAILURE;
+				}
+
+				ast = ast_new_from_fsm(fsm);
+				if (ast == NULL) {
+					perror("ast_new_from_fsm");
+					fsm_free(fsm);
+					return EXIT_FAILURE;
+				}
+
+				fsm_free(fsm);
+			}
 
 			fclose(f);
 		} else {
@@ -642,7 +734,9 @@ main(int argc, char *argv[])
 			return EXIT_FAILURE;
 		}
 
-		print_ast(stdout, &opt, ast);
+		print_ast(stdout, &opt, flags, ast);
+
+		ast_free(ast);
 
 		return 0;
 	}
@@ -654,6 +748,8 @@ main(int argc, char *argv[])
 		perror("fsm_new");
 		return EXIT_FAILURE;
 	}
+
+	fsm_to_cleanup = fsm;
 
 	{
 		int i;
@@ -671,12 +767,20 @@ main(int argc, char *argv[])
 				break;
 			}
 
-			if (yfiles) {
+			if (fsmfiles || yfiles) {
 				FILE *f;
 
 				f = xopen(argv[i]);
 
-				new = re_comp(dialect, fsm_fgetc, f, &opt, flags, &err);
+				if (!fsmfiles) {
+					new = re_comp(dialect, fsm_fgetc, f, &opt, flags, &err);
+				} else {
+					new = fsm_parse(f, &opt);
+					if (new == NULL) {
+						perror("fsm_parse");
+						return EXIT_FAILURE;
+					}
+				}
 
 				fclose(f);
 			} else {
@@ -730,6 +834,8 @@ main(int argc, char *argv[])
 							return EXIT_FAILURE;
 						}
 
+						add_matches_list(matches);
+
 						assert(fsm_getopaque(new, s) == NULL);
 						fsm_setopaque(new, s, matches);
 					}
@@ -752,6 +858,8 @@ main(int argc, char *argv[])
 				perror("fsm_union/concat");
 				return EXIT_FAILURE;
 			}
+
+			fsm_to_cleanup = fsm;
 
 			if (query != NULL) {
 				int r;
@@ -987,6 +1095,7 @@ main(int argc, char *argv[])
 		/* XXX: free opaques */
 
 		fsm_free(fsm);
+		fsm_to_cleanup = NULL;
 
 		if (vm != NULL) {
 			fsm_vm_free(vm);

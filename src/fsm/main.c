@@ -21,12 +21,12 @@
 #include <fsm/walk.h>
 #include <fsm/print.h>
 #include <fsm/options.h>
+#include <fsm/parser.h>
 
 #include <adt/stateset.h> /* XXX */
 
 #include "libfsm/internal.h" /* XXX */
 
-#include "parser.h"
 #include "wordgen.h"
 
 #if defined(__APPLE__) && defined(__MACH__) && defined(MACOS_HAS_NO_CLOCK_GETITME)
@@ -106,7 +106,7 @@ static void
 usage(void)
 {
 	printf("usage: fsm [-x] {<text> ...}\n");
-	printf("       fsm {-p} [-l <language>] [-acwX] [-k <io>] [-e <prefix>]\n");
+	printf("       fsm {-p} [-l <language>] [-aCcwX] [-k <io>] [-e <prefix>]\n");
 	printf("       fsm {-dmr | -t <transformation>} [-i <iterations>] [<file.fsm> | <file-a> <file-b>]\n");
 	printf("       fsm {-q <query>} [<file>]\n");
 	printf("       fsm {-W <maxlen>} <file.fsm>\n");
@@ -163,6 +163,7 @@ print_name(const char *name)
 		{ "json",  fsm_print_json  },
 		{ "vmc",   fsm_print_vmc   },
 		{ "vmdot", fsm_print_vmdot },
+		{ "rust",  fsm_print_rust  },
 		{ "sh",    fsm_print_sh    },
 		{ "go",    fsm_print_go    },
 
@@ -348,6 +349,16 @@ gen_words(FILE *f, const struct fsm *fsm)
 }
 #endif /* 0 */
 
+static struct fsm *fsm_to_cleanup = NULL;
+
+static void
+do_fsm_cleanup(void)
+{
+	if (fsm_to_cleanup != NULL) {
+		fsm_free(fsm_to_cleanup);
+		fsm_to_cleanup = NULL;
+	}
+}
 
 int
 main(int argc, char *argv[])
@@ -363,6 +374,8 @@ main(int argc, char *argv[])
 	int (*query)(const struct fsm *, fsm_state_t);
 	int (*walk )(const struct fsm *,
 		 int (*)(const struct fsm *, fsm_state_t));
+
+	atexit(do_fsm_cleanup);
 
 	opt.comments = 1;
 	opt.io       = FSM_IO_GETC;
@@ -380,10 +393,11 @@ main(int argc, char *argv[])
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:i:" "xpq:l:dGmrt:W:"), c != -1) {
+		while (c = getopt(argc, argv, "h" "aCcwXe:k:i:" "xpq:l:dGmrt:W:"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 1;          break;
 			case 'c': opt.consolidate_edges = 1;          break;
+			case 'C': opt.comments		= 0;          break;
 			case 'w': opt.fragment          = 1;          break;
 			case 'X': opt.always_hex        = 1;          break;
 			case 'e': opt.prefix            = optarg;     break;
@@ -489,7 +503,9 @@ main(int argc, char *argv[])
 		case OP_REVERSE:     r = fsm_reverse(q);      break;
 		case OP_DETERMINISE: r = fsm_determinise(q);  break;
 		case OP_GLUSHKOVISE: r = fsm_glushkovise(q);  break;
-		case OP_TRIM:        r = fsm_trim(q);         break;
+		case OP_TRIM:        r = fsm_trim(q,
+		    FSM_TRIM_START_AND_END_REACHABLE, NULL);
+			break;
 
 		case OP_CONCAT:      q = fsm_concat(a, b);    break;
 		case OP_UNION:       q = fsm_union(a, b);     break;
@@ -518,6 +534,8 @@ main(int argc, char *argv[])
 		if (r == -1) {
 			q = NULL;
 		}
+
+		fsm_to_cleanup = q;
 
 		if (-1 == clock_gettime(CLOCK_MONOTONIC, &post)) {
 			perror("clock_gettime");
@@ -641,6 +659,7 @@ main(int argc, char *argv[])
 	}
 
 	fsm_free(fsm);
+	fsm_to_cleanup = NULL;
 
 	return r;
 }

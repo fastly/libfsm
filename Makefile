@@ -18,7 +18,7 @@ RE     ?= re
 BUILD  ?= build
 PREFIX ?= /usr/local
 
-.if !empty(.TARGETS:Mfuzz)
+.if make(fuzz) || make(${BUILD}/theft/theft)
 PKG += libtheft
 .endif
 
@@ -61,6 +61,7 @@ SUBDIR += tests/native
 SUBDIR += tests/pcre
 SUBDIR += tests/pcre-classes
 SUBDIR += tests/pcre-anchor
+SUBDIR += tests/pcre-flags
 SUBDIR += tests/pcre-repeat
 SUBDIR += tests/pred
 SUBDIR += tests/reverse
@@ -73,7 +74,7 @@ SUBDIR += tests/hashset
 SUBDIR += tests/queue
 SUBDIR += tests/aho_corasick
 SUBDIR += tests
-.if !empty(.TARGETS:Mfuzz)
+.if make(fuzz) || make(${BUILD}/theft/theft)
 SUBDIR += theft
 .endif
 SUBDIR += pc
@@ -92,9 +93,17 @@ INCDIR += include
 .include <part.mk>
 .include <prog.mk>
 .include <mkdir.mk>
+
+# these are internal tools for development; we don't install them to $PREFIX
+STAGE_BUILD := ${STAGE_BUILD:Nbin/retest}
+STAGE_BUILD := ${STAGE_BUILD:Nbin/reperf}
+STAGE_BUILD := ${STAGE_BUILD:Nbin/cvtpcre}
+
 .include <install.mk>
 .include <clean.mk>
 
-test::
+.if make(test)
+.END::
 	grep FAIL ${BUILD}/tests/*/res*; [ $$? -ne 0 ]
+.endif
 

@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include <ctype.h>
 
@@ -193,7 +194,7 @@ expr_compile(struct ast_expr *e, enum re_flags flags,
 }
 
 static int
-addedge_literal(struct comp_env *env,
+addedge_literal(struct comp_env *env, enum re_flags re_flags,
 	fsm_state_t from, fsm_state_t to, char c)
 {
 	struct fsm *fsm = env->fsm;
@@ -202,7 +203,7 @@ addedge_literal(struct comp_env *env,
 	assert(from < env->fsm->statecount);
 	assert(to < env->fsm->statecount);
 
-	if (env->re_flags & RE_ICASE) {
+	if (re_flags & RE_ICASE) {
 		if (!fsm_addedge_literal(fsm, from, to, tolower((unsigned char) c))) {
 			return 0;
 		}
@@ -289,7 +290,6 @@ can_have_backward_epsilon_edge(const struct ast_expr *e)
 	switch (e->type) {
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
-	case AST_EXPR_FLAGS:
 	case AST_EXPR_ALT:
 	case AST_EXPR_ANCHOR:
 	case AST_EXPR_RANGE:
@@ -388,12 +388,10 @@ decide_linking(struct comp_env *env,
 	case AST_EXPR_SUBTRACT:
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
-	case AST_EXPR_ANY:
 
 	case AST_EXPR_CONCAT:
 	case AST_EXPR_ALT:
 	case AST_EXPR_REPEAT:
-	case AST_EXPR_FLAGS:
 	case AST_EXPR_RANGE:
 	case AST_EXPR_TOMBSTONE:
 		break;
@@ -499,7 +497,7 @@ print_linkage(enum link_types t)
     if (!fsm_addedge_any(env->fsm, (FROM), (TO))) { return 0; }
 
 #define LITERAL(FROM, TO, C)        \
-    if (!addedge_literal(env, (FROM), (TO), (C))) { return 0; }
+    if (!addedge_literal(env, n->re_flags, (FROM), (TO), (C))) { return 0; }
 
 #define RECURSE(FROM, TO, NODE)     \
     if (!comp_iter(env, (FROM), (TO), (NODE))) { return 0; }
@@ -726,13 +724,11 @@ comp_iter(struct comp_env *env,
 	{
 		fsm_state_t base, z;
 		fsm_state_t curr_x;
-		enum re_flags saved;
 		size_t i;
 
 		const size_t count  = n->u.concat.count;
 
 		curr_x = x;
-		saved  = env->re_flags;
 
 		assert(count >= 1);
 
@@ -754,22 +750,6 @@ comp_iter(struct comp_env *env,
 				z = y;
 			}
 
-			if (curr->type == AST_EXPR_FLAGS) {
-				/*
-				 * Save the current flags in the flags node,
-				 * restore when done evaluating the concat
-				 * node's right subtree.
-				 */
-				saved = env->re_flags;
-				
-				/*
-				 * Note: in cases like `(?i-i)`, the negative is
-				 * required to take precedence.
-				 */
-				env->re_flags |=  curr->u.flags.pos;
-				env->re_flags &= ~curr->u.flags.neg;
-			}
-
 			/*
 			 * If nullable, add an extra state & epsilion as a one-way gate
 			 */
@@ -785,8 +765,6 @@ comp_iter(struct comp_env *env,
 
 			curr_x = z;
 		}
-
-		env->re_flags = saved;
 
 		break;
 	}
@@ -846,10 +824,6 @@ comp_iter(struct comp_env *env,
 		break;
 	}
 
-	case AST_EXPR_ANY:
-		ANY(x, y);
-		break;
-
 	case AST_EXPR_REPEAT:
 		/*
 		 * REPEAT breaks out into its own function, because
@@ -863,13 +837,6 @@ comp_iter(struct comp_env *env,
 	case AST_EXPR_GROUP:
 		RECURSE(x, y, n->u.group.e);
 		break;
-
-	case AST_EXPR_FLAGS:
-		/*
-		 * This is purely a metadata node, handled at analysis
-		 * time; just bridge the start and end states.
-		 */
-		EPSILON(x, y);
 
 	case AST_EXPR_TOMBSTONE:
 		/* do not link -- intentionally pruned */
@@ -895,7 +862,7 @@ comp_iter(struct comp_env *env,
 		struct fsm *q;
 		enum re_flags re_flags;
 
-		re_flags = env->re_flags;
+		re_flags = n->re_flags;
 
 		/* wouldn't want to reverse twice! */
 		re_flags &= ~RE_REVERSE;
@@ -946,6 +913,13 @@ comp_iter(struct comp_env *env,
 		}
 
 		assert(n->u.range.from.u.literal.c <= n->u.range.to.u.literal.c);
+
+		if (n->u.range.from.u.literal.c == 0x00 &&
+			n->u.range.to.u.literal.c == 0xff)
+		{
+			ANY(x, y);
+			break;
+		}
 
 		for (i = n->u.range.from.u.literal.c; i <= n->u.range.to.u.literal.c; i++) {
 			LITERAL(x, y, i);

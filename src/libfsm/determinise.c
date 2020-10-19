@@ -201,9 +201,8 @@ fsm_determinise(struct fsm *nfa)
 		 */
 
 		if (!fsm_getstart(nfa, &start)) {
-			errno = EINVAL;
-			/* TODO: free mappings */
-			return 0;
+			mapping_hashset_free(mappings);
+			return 1;
 		}
 
 		set = NULL;
@@ -357,11 +356,14 @@ fsm_determinise(struct fsm *nfa)
 		}
 	}
 
+	mapping_hashset_free(mappings);
+
 	return 1;
 
 error:
 
 	/* TODO: free stuff */
+	mapping_hashset_free(mappings);
 
 	return 0;
 }

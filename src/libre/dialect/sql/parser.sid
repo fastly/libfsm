@@ -43,6 +43,7 @@
 	!OPENGROUPINV: () -> (:pos, :pos);
 	!OPENGROUPCB: () -> (:pos, :pos);
 	!OPENGROUPINVCB: () -> (:pos, :pos);
+	!CLOSEGROUPRANGE: () -> (:char, :pos, :pos);
 
 	OPENCOUNT: () -> (:pos, :pos);
 	COUNT: () -> (:unsigned);
@@ -67,6 +68,8 @@
 	!HEX:     () -> (:char, :pos, :pos);
 	CHAR:     () -> (:char, :pos, :pos);
 
+	!UNSUPPORTED:     () -> (:char, :pos, :pos);
+
 	EOF;
 	!ERROR;
 
@@ -86,16 +89,16 @@
 
 	<ast-range-endpoint-literal>: (:char)         -> (:endpoint);
 	!<ast-range-endpoint-class>:  (:ast_class_id) -> (:endpoint);
-	!<ast-range-distinct>: (:endpoint, :pos, :endpoint, :pos) -> ();
 
 	<ast-make-empty>:         ()                       -> (:ast_expr);
 	<ast-make-literal>:       (:char)                  -> (:ast_expr);
 	<ast-make-concat>:        ()                       -> (:ast_expr);
 	<ast-make-alt>:           ()                       -> (:ast_expr);
-	<ast-make-any>:           ()                       -> (:ast_expr);
 	<ast-make-piece>:         (:ast_expr, :ast_count)  -> (:ast_expr);
 	<ast-make-group>:         (:ast_expr)              -> (:ast_expr);
-	!<ast-make-re-flags>:     (:re_flags, :re_flags)   -> (:ast_expr);
+	!<ast-get-re-flags>:      ()                       -> (:re_flags);
+	!<ast-set-re-flags>:      (:re_flags)              -> ();
+	!<ast-mask-re-flags>:     (:re_flags, :re_flags)   -> ();
 	!<ast-make-anchor-start>: ()                       -> (:ast_expr);
 	!<ast-make-anchor-end>:   ()                       -> (:ast_expr);
 	<ast-make-subtract>:      (:ast_expr, :ast_expr)   -> (:ast_expr);
@@ -117,11 +120,14 @@
 	!<err-expected-groupbody>;
 	<err-expected-eof>;
 	!<err-unsupported>;
+	!<err-invalid-comment>;
 
 	<mark-group>: (:pos, :pos) -> ();
 	<mark-range>: (:pos, :pos) -> ();
 	<mark-count>: (:pos, :pos) -> ();
 	<mark-expr>: (:ast_expr, :pos, :pos) -> ();
+
+	<class-any>: () -> (:ast_class_id);
 
 	expr: () -> (node :ast_expr) [
 
@@ -291,10 +297,12 @@
 
 			atom: () -> (e :ast_expr) = {
 				ANY;
-				e = <ast-make-any>;
+				a = <class-any>;
+				e = <ast-make-named>(a);
 			||
 				MANY;
-				g = <ast-make-any>;
+				a = <class-any>;
+				g = <ast-make-named>(a);
 				c = <count-zero-or-more>;
 				e = <ast-make-piece>(g, c);
 			||
@@ -309,7 +317,7 @@
 				CLOSESUB;
 			##
 				<err-expected-atom>;
-				e = <ast-make-any>;
+				e = <ast-make-empty>;
 			};
 
 			count: () -> (c :ast_count) = {

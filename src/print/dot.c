@@ -52,3 +52,25 @@ dot_escputc_html(FILE *f, const struct fsm_options *opt, char c)
 	return fprintf(f, "%c", c);
 }
 
+/*
+ * Record nodes introduce their own syntax on top of the usual escaping.
+ */
+int
+dot_escputc_html_record(FILE *f, const struct fsm_options *opt, char c)
+{
+	if (!opt->always_hex) {
+		switch (c) {
+		case '{':
+		case '}':
+		case '|':
+		case '\\':
+			return fprintf(f, "\\%c", c);
+
+		default:
+			break;
+		}
+	}
+
+	return dot_escputc_html(f, opt, c);
+}
+

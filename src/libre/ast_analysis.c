@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include <re/re.h>
 
@@ -65,7 +66,6 @@ analysis_iter(struct analysis_env *env, struct ast_expr *n)
 
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
-	case AST_EXPR_ANY:
 	case AST_EXPR_RANGE:
 		/* no special handling */
 		break;
@@ -141,10 +141,6 @@ analysis_iter(struct analysis_env *env, struct ast_expr *n)
 		break;
 	}
 
-	case AST_EXPR_FLAGS:
-		set_flags(n, AST_FLAG_NULLABLE); 
-		break;
-
 	case AST_EXPR_ANCHOR:
 		/* anchor flags will be handled on the second pass */
 		break;
@@ -174,7 +170,6 @@ always_consumes_input(const struct ast_expr *n, int thud)
 	switch (n->type) {
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
-	case AST_EXPR_ANY:
 	case AST_EXPR_RANGE:
 		return 1;
 
@@ -242,7 +237,6 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 
 	switch (n->type) {
 	case AST_EXPR_EMPTY:
-	case AST_EXPR_FLAGS:
 	case AST_EXPR_TOMBSTONE:
 		break;
 
@@ -299,7 +293,6 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
-	case AST_EXPR_ANY:
 	case AST_EXPR_RANGE:
 		if (!is_nullable(n)) {
 			env->past_any_consuming = 1;
@@ -469,7 +462,6 @@ assign_firsts(struct ast_expr *n)
 {
 	switch (n->type) {
 	case AST_EXPR_EMPTY:
-	case AST_EXPR_FLAGS:
 	case AST_EXPR_TOMBSTONE:
 		break;
 
@@ -479,7 +471,6 @@ assign_firsts(struct ast_expr *n)
 
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
-	case AST_EXPR_ANY:
 	case AST_EXPR_RANGE:
 		set_flags(n, AST_FLAG_FIRST);
 		break;
@@ -543,7 +534,6 @@ assign_lasts(struct ast_expr *n)
 {
 	switch (n->type) {
 	case AST_EXPR_EMPTY:
-	case AST_EXPR_FLAGS:
 	case AST_EXPR_TOMBSTONE:
 		break;
 
@@ -553,7 +543,6 @@ assign_lasts(struct ast_expr *n)
 
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
-	case AST_EXPR_ANY:
 	case AST_EXPR_RANGE:
 		set_flags(n, AST_FLAG_LAST);
 		break;

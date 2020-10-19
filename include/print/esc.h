@@ -15,12 +15,18 @@ escputc c_escputc_char;
 escputc c_escputc_str;
 escputc abnf_escputc;
 escputc dot_escputc_html;
+escputc dot_escputc_html_record;
 escputc fsm_escputc;
 escputc json_escputc;
 escputc pcre_escputc;
+escputc rust_escputc_char;
+escputc rust_escputc_str;
 
 void
 c_escputcharlit(FILE *f, const struct fsm_options *opt, char c);
+
+void
+rust_escputcharlit(FILE *f, const struct fsm_options *opt, char c);
 
 int
 escputs(FILE *f, const struct fsm_options *opt, escputc *escputc,

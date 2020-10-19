@@ -13,17 +13,19 @@ enum error_type {
 	ERROR_BAD_RECORD_TYPE   ,
 	ERROR_ESCAPE_SEQUENCE   ,
 	ERROR_PARSING_REGEXP    ,
+	ERROR_GLUSHKOVISING     ,
 	ERROR_DETERMINISING     ,
+	ERROR_MINIMISING        ,
 	ERROR_COMPILING_BYTECODE,
 	ERROR_SHOULD_MATCH      ,
 	ERROR_SHOULD_NOT_MATCH  ,
 	ERROR_FILE_IO           ,
-	ERROR_CLOCK_ERROR       ,
 	ERROR_INVALID_PARAMETER ,
 };
 
 enum implementation {
 	IMPL_C,
+	IMPL_RUST,
 	IMPL_VMC,
 	IMPL_VMASM,
 	IMPL_INTERPRET
@@ -37,6 +39,12 @@ struct fsm_runner {
 			void *h;
 			int (*func)(const char *, const char *);
 		} impl_c;
+
+		struct {
+			/* pub extern "C" fn f(ptr: *const c_uchar, len: usize) -> usize */
+			void *h;
+			size_t (*func)(const unsigned char *, size_t);
+		} impl_rust;
 
 		struct {
 			void *h;
