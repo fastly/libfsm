@@ -14,25 +14,24 @@
 
 # predicates
 '^'  -> $start;
-'$'  -> $end;
+'$'  -> $end__nl; # equivalent to \Z in single-line mode
 
 # Similar predicates.  Without the concept of "multiline mode," these
 # should be the same as ^ and $.
-#
-# TODO: evaluate how they are different and also if a "multiline mode"
-# matching call makes sense for libfsm.
 #
 # > The \A, \Z, and \z assertions differ from the traditional circumflex
 # > and dollar (described in the next section) in that they only ever
 # > match at the very start and end of the subject string, whatever
 # > options are set. Thus, they are independent of multiline mode. 
+#
+# > \Z matches before a newline at the end of the string
+# > as well as at the very end, whereas \z matches only at the end.
 '\A' -> $start;
+'\Z' -> $end__nl;
 '\z' -> $end;
 
-# not yet implemented:
-# > matches at the end of the subject
-# >    also matches before a newline at the end of the subject
-'\Z' -> $unsupported;
+# unicode extended grapheme cluster
+'\X' -> $unsupported;
 
 # this could be implemented
 # > matches at the first matching position in the subject
@@ -92,21 +91,46 @@
 '\V' -> $named__class;
 '\w' -> $named__class;
 '\W' -> $named__class;
+
 # This break the uppercase/lowercase symmetry; conceptually, it's the
 # negation of `.`, which matches everything except `\n`.
 '\N' -> $named__class;
 
-'\'   /[0-7]{2,3}/     -> $oct;
-'\0'                   -> $oct;
+# configurable line ending
+'\R' -> $eol;
 
-# PCRE treats \1 ... \7 as back references outside of a character class
+'\o{' /[0-7]+/i '}'    -> $oct;
+'\x'  /[0-9a-f]{0,2}/i -> $hex;
+'\x{' /[0-9a-f]+/i '}' -> $hex;
+
+# "After \0 up to two further octal digits are read. If there are fewer
+# than two digits, just those that are present are used.
+# Thus the sequence \0\x\015 specifies two binary zeros followed by a
+# CR character (code value 13)."
+'\0'  /[0-7]{0,2}/     -> $oct;
+
+# "Outside a character class, a backslash followed by a digit greater than 0
+# (and possibly further digits) is a back reference to a capturing subpattern
+# earlier (that is, to its left) in the pattern, provided there have been that
+# many previous capturing left parentheses."
 #
-# It's actually more complicated than that.  \<digits> is treated as a
-# backref as long as there are _already_ that many capture groups in the
-# expression.  Given that back references are unsupported, this seems
-# like a overkill for a seldom-used feature.  However, it's nice to
-# indicate that the usual backrefs aren't supported.
-'\'   /[1-7]/          -> $unsupported;
+# "... PCRE reads the digit and any following digits as a decimal number."
+#
+# "However, if the decimal number following the backslash is less than 10,
+# it is always taken as a back reference, and causes an error only if there
+# are not that many capturing left parentheses in the entire pattern.
+# In other words, the parentheses that are referenced need not be to the left
+# of the reference for numbers less than 10. ... It is not possible to have a
+# numerical "forward back reference" to a subpattern whose number is 10 or more
+# using this syntax because a sequence such as \50 is interpreted as a character
+# defined in octal."
+#
+# So I take the pattern below to mean a decimal sequence which may be either
+# a backreference or something else (I presume a base 10 literal). Either way
+# I'm disallowing both of these here for now. I think it is possible that we
+# could lex and parse these eventually though (which I do not think we could
+# do for the same sequence inside a character class).
+'\'   /[1-9][0-9]*/    -> $unsupported;
 
 # the new and proper way for back references
 '\g' -> $unsupported;
@@ -141,6 +165,10 @@
 
 	# atomic assertions are also unsupported
 	'atomic:' -> $unsupported;
+
+	# different line ending conventions
+	# these are only permitted at the start of a regexp
+	/CR|LF|CRLF|ANYCRLF|ANY/ -> $unsupported;
 }
 
 # Resets current captured text.  Not _yet_ supported.
@@ -151,11 +179,7 @@
 '\b' -> $unsupported;
 '\B' -> $unsupported;
 
-'\o{' /[0-7]+/i '}'    -> $oct;
-'\x'  /[0-9a-f]{0,2}/i -> $hex;
-'\x{' /[0-9a-f]+/i '}' -> $hex;
-
-'\' /./ - ($esc | $control | $oct | $hex | '\Q' | '\A' | '\z' | '\E' | $named__class | $unsupported) -> $noesc;
+'\' /./ - ($esc | $control | $oct | $hex | '\Q' | '\A' | '\Z' | '\z' | '\E' | '\R' | $named__class | $unsupported) -> $noesc;
 '\' -> $invalid;
 
 # Comments are just ignored... no token emitted
@@ -167,8 +191,13 @@
 
 '(?' -> $flags .. ':' -> $sub, ')' -> $close {
 	'-' -> $negate;
+	'xx' -> $flag__unknown;  # xx (EXTENDED_MORE) is not yet supported
 	'i' -> $flag__insensitive;
-	/[a-z]/ - $flag__insensitive -> $flag__unknown;
+	's' -> $flag__single;
+	'x' -> $flag__extended;
+	'n' -> $flag__ignore; # 'n' is the no auto capture flag, which we can ignore
+	flags = $flag__insensitive | $flag__single | $flag__extended | $flag__ignore;
+	/[a-z]/ - flags -> $flag__unknown;
 
 	# this is a little too broad... but should screen out
 	# recursive matching and subroutines, which are
@@ -184,7 +213,7 @@
 
 # recursion with named parentheses
 '(?&' -> $unsupported;
-'(P>' -> $unsupported;
+'(?P>' -> $unsupported;
 
 '[' -> $opengroup, '[^' -> $opengroupinv, '[]' -> $opengroupcb, '[^]' -> $opengroupinvcb .. ']' -> $closegroup, '-]' -> $closegrouprange {
 	'-' -> $range;
@@ -220,6 +249,14 @@
 	'\+' -> $esc;
 	'\{' -> $esc;
 
+	# "The sequences \B, \N, \R, and \X are not special inside a character class.
+	# Like any other unrecognized escape sequences, they are treated as the literal
+	# characters "B", "N", "R", and "X" by default"
+	'\B' -> $noesc;
+	'\N' -> $noesc;
+	'\R' -> $noesc;
+	'\X' -> $noesc;
+
 	'\d' -> $named__class;
 	'\D' -> $named__class;
 	'\h' -> $named__class;
@@ -230,16 +267,28 @@
 	'\V' -> $named__class;
 	'\w' -> $named__class;
 	'\W' -> $named__class;
-	'\N' -> $named__class;
 
-	'\'   /[0-7]{1,3}/     -> $oct;
 	'\o{' /[0-7]+/i '}'    -> $oct;
-	'\x'  /[0-9a-f]{1,2}/i -> $hex;
+	'\x'  /[0-9a-f]{0,2}/i -> $hex;
 	'\x{' /[0-9a-f]+/i '}' -> $hex;
 
-	'\E';
+	'\0'  /[0-7]{0,2}/     -> $oct;
 
-	'\' /./ - ($esc | $control | $oct | $hex | '\Q' | '\E' | $named__class) -> $noesc;
+	# "Inside a character class, or if the decimal number following \ is
+	# greater than 7 and there have not been that many capturing subpatterns,
+	# PCRE handles \8 and \9 as the literal characters "8" and "9", and
+	# otherwise re-reads up to three octal digits following the backslash,
+	# using them to generate a data character. Any subsequent digits stand
+	# for themselves. For example:"
+	#
+	# " \81    is either a back reference, or the two characters "8" and "1""
+	#
+	# For this reason I do not think we can ever lex correctly here, because
+	# we would need to produce either one or two tokens, depending on the
+	# presence of capturing groups.
+	'\'   /[1-9][0-9]*/     -> $unsupported;
+
+	'\' /./ - ($esc | $control | $oct | $hex | '\Q' | '\E' | '\B' | '\N' | '\R' | '\X' | $named__class | '\' /[1-9][0-9]*/ ) -> $noesc;
 	'\' -> $invalid;
 
 	# FIXME: negated character classes, e.g. [:^alpha:]
@@ -262,6 +311,7 @@
 	/[^\-\\\x00]/ -> $char;
 
 	# lone \E without a preceding \Q is ignored
+	'\E';
 
 	'\Q' .. '\E' {
 		/./ - "\x00" -> $char;
@@ -273,12 +323,24 @@
 	/[0-9]+/ -> $count;
 }
 
+'#'  -> $maybe_comment;
+
+" "  -> $whitespace;
+"\t" -> $whitespace;
+"\v" -> $whitespace;
+"\f" -> $whitespace;
+"\n" -> $newline;
+"\r" -> $newline;
+
 '\Q' .. '\E' {
+	# TODO: check if extended mode (x) ignores whitespace between \Q
+	# and \E
 	/./ - "\x00" -> $char;
 }
 
-/./ - ($open | $close | $start | $end
+/./ - ($open | $close | $start | $end__nl
 	| $opt | $star | $plus | $any | $alt
 	| $esc | $oct | $hex | $invalid
+	| $maybe_comment | $whitespace | $newline
 	| $opengroup | $opencount | "\x00") -> $char;
 

@@ -91,7 +91,7 @@ print_end(FILE *f, const struct dfavm_op_ir *op, const struct fsm_options *opt,
 	}
 
 	if (opt->endleaf != NULL) {
-		opt->endleaf(f, op->ir_state->opaque, opt->endleaf_opaque);
+		opt->endleaf(f, op->ir_state->end_ids, opt->endleaf_opaque);
 	} else {
 		fprintf(f, "ret %lu", (unsigned long) (op->ir_state - ir->states));
 	}
@@ -160,7 +160,11 @@ fsm_print_nodes(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 		fprintf(f, "</td>\n");
 
 		fprintf(f, "\t\t\t<td>");
-		fprintf(f, op->ir_state->isend ? "(S%u)" : "S%u", ir_indexof(ir, op->ir_state));
+		if (op->ir_state != NULL) {
+			fprintf(f, op->ir_state->isend ? "(S%u)" : "S%u", ir_indexof(ir, op->ir_state));
+		} else {
+			fprintf(f, "(none)");
+		}
 		fprintf(f, "</td>\n");
 
 		switch (op->instr) {
@@ -300,7 +304,6 @@ void
 fsm_print_vmdot(FILE *f, const struct fsm *fsm)
 {
 	struct ir *ir;
-	const char *prefix;
 
 	assert(f != NULL);
 	assert(fsm != NULL);
@@ -312,12 +315,6 @@ fsm_print_vmdot(FILE *f, const struct fsm *fsm)
 	}
 
 	/* henceforth, no function should be passed struct fsm *, only the ir and options */
-
-	if (fsm->opt->prefix != NULL) {
-		prefix = fsm->opt->prefix;
-	} else {
-		prefix = "fsm_";
-	}
 
 	if (fsm->opt->fragment) {
 		fsm_print_vmdotfrag(f, ir, fsm->opt);

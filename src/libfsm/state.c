@@ -32,11 +32,16 @@ fsm_addstate(struct fsm *fsm, fsm_state_t *state)
 	if (fsm->statecount == fsm->statealloc) {
 		const size_t factor = 2; /* a guess */
 		const size_t n = fsm->statealloc * factor;
-		void *tmp;
+		struct fsm_state *tmp;
+		size_t i;
 
 		tmp = f_realloc(fsm->opt->alloc, fsm->states, n * sizeof *fsm->states);
 		if (tmp == NULL) {
 			return 0;
+		}
+
+		for (i = fsm->statealloc; i < n; i++) {
+			tmp[i].has_capture_actions = 0;
 		}
 
 		fsm->statealloc = n;
@@ -54,7 +59,6 @@ fsm_addstate(struct fsm *fsm, fsm_state_t *state)
 
 		new->end      = 0;
 		new->visited  = 0;
-		new->opaque   = NULL;
 		new->epsilons = NULL;
 		new->edges    = NULL;
 	}
@@ -79,7 +83,6 @@ fsm_addstate_bulk(struct fsm *fsm, size_t n)
 
 			new->end      = 0;
 			new->visited  = 0;
-			new->opaque   = NULL;
 			new->epsilons = NULL;
 			new->edges    = NULL;
 		}
@@ -106,7 +109,7 @@ otherwise realloc to += twice as much more
 	return 1;
 }
 
-void
+int
 fsm_removestate(struct fsm *fsm, fsm_state_t state)
 {
 	fsm_state_t start, i;
@@ -145,11 +148,14 @@ fsm_removestate(struct fsm *fsm, fsm_state_t state)
 
 		for (i = 0; i < fsm->statecount - 1; i++) {
 			state_set_replace(&fsm->states[i].epsilons, fsm->statecount - 1, state);
-			edge_set_replace_state(&fsm->states[i].edges, fsm->statecount - 1, state);
+			if (!edge_set_replace_state(&fsm->states[i].edges, fsm->opt->alloc, fsm->statecount - 1, state)) {
+				return 0;
+			}
 		}
 	}
 
 	fsm->statecount--;
+	return 1;
 }
 
 static fsm_state_t
@@ -158,6 +164,8 @@ mapping_cb(fsm_state_t id, const void *opaque)
 	const fsm_state_t *mapping = opaque;
 	return mapping[id];
 }
+
+#define LOG_COMPACT 0
 
 int
 fsm_compact_states(struct fsm *fsm,
@@ -185,6 +193,9 @@ fsm_compact_states(struct fsm *fsm,
 			/* for endpoint accounting */
 			fsm_setend(fsm, i, 0);
 		}
+#if LOG_COMPACT > 0
+		fprintf(stderr, "fsm_compact_states: mapping[%u] == %d, kept %zu\n", i, mapping[i], kept);
+#endif
 	}
 
 	/* Clear start state, if doomed. */
@@ -192,6 +203,9 @@ fsm_compact_states(struct fsm *fsm,
 		if (mapping[old_start] == FSM_STATE_REMAP_NO_STATE) {
 			fsm_clearstart(fsm);
 			old_start = FSM_STATE_REMAP_NO_STATE;
+#if LOG_COMPACT > 0
+			fprintf(stderr, "fsm_compact_states: clearing old start state %d\n", old_start);
+#endif
 		}
 	}
 
@@ -199,11 +213,17 @@ fsm_compact_states(struct fsm *fsm,
 	for (i = 0; i < orig_statecount; i++) {
 		struct fsm_state *s = &fsm->states[i];
 		if (mapping[i] == FSM_STATE_REMAP_NO_STATE) {
+#if LOG_COMPACT > 0
+			fprintf(stderr, "fsm_compact_states: skipping doomed state %d\n", i);
+#endif
 			continue; /* skip -- doomed */
 		}
+#if LOG_COMPACT > 0
+		fprintf(stderr, "fsm_compact_states: compacting epsilons on state %d\n", i);
+#endif
 		state_set_compact(&s->epsilons, mapping_cb, mapping);
 		if (fsm->states[i].edges != NULL) {
-			edge_set_compact(&s->edges, mapping_cb, mapping);
+			edge_set_compact(&s->edges, fsm->opt->alloc, mapping_cb, mapping);
 		}
 	}
 
@@ -216,12 +236,19 @@ fsm_compact_states(struct fsm *fsm,
 
 			fsm->statecount--;
 			removed_count++;
+#if LOG_COMPACT > 0
+			fprintf(stderr, "fsm_compact_states: removing dead state %d, statecount now %zu, removed %zu\n",
+			    i, fsm->statecount, removed_count);
+#endif
 		} else {				      /* keep */
 			if (dst != i) {
 				memcpy(&fsm->states[dst],
 				    &fsm->states[i],
 				    sizeof(fsm->states[0]));
 			}
+#if LOG_COMPACT > 0
+			fprintf(stderr, "fsm_compact_states: keeping state %d as %d\n", i, dst);
+#endif
 			dst++;
 		}
 	}
@@ -236,6 +263,9 @@ fsm_compact_states(struct fsm *fsm,
 		const fsm_state_t new_start = mapping[old_start];
 		assert(new_start < fsm->statecount);
 		fsm_setstart(fsm, new_start);
+#if LOG_COMPACT > 0
+			fprintf(stderr, "fsm_compact_states: setting new start state %d\n", new_start);
+#endif
 	}
 
 	if (fsm->statecount < orig_statecount/2) {

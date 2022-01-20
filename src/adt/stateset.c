@@ -216,7 +216,6 @@ state_set_add(struct state_set **setp, const struct fsm_alloc *alloc,
 	size_t i;
 
 	assert(setp != NULL);
-	assert(state <= SINGLETON_MAX);
 
 	if (*setp == NULL) {
 		*setp = SINGLETON_ENCODE(state);
@@ -393,6 +392,11 @@ state_set_copy(struct state_set **dst, const struct fsm_alloc *alloc,
 	return 1;
 }
 
+#define LOG_COMPACT 0
+#if LOG_COMPACT
+#include <stdio.h>
+#endif
+
 void
 state_set_compact(struct state_set **setp,
     fsm_state_remap_fun *remap, void *opaque)
@@ -424,21 +428,26 @@ state_set_compact(struct state_set **setp,
 
 	for (i = 0; i < set->i; i++) {
 		const fsm_state_t s = set->a[i];
-		const fsm_state_t new_id = remap(s + removed, opaque);
+		const fsm_state_t new_id = remap(s, opaque);
 
 		if (new_id == FSM_STATE_REMAP_NO_STATE) { /* drop */
 			removed++;
 		} else {	/* keep */
-			if (dst < i) {
-				memcpy(&set->a[dst],
-				    &set->a[i],
-				    sizeof(set->a[0]));
-			}
+			set->a[dst] = new_id;
 			dst++;
 		}
+#if LOG_COMPACT
+		fprintf(stderr, "state_set_compact: set->a[%zu]: %d -> %d, removed %zu\n", i, s, new_id, removed);
+#endif
 	}
 	set->i -= removed;
 	assert(set->i == dst);
+
+#if LOG_COMPACT
+	for (i = 0; i < set->i; i++) {
+		fprintf(stderr, "state_set_compact: now set->a[%zu/%zu]: %d\n", i, set->i, set->a[i]);
+	}
+#endif
 }
 
 void
@@ -539,7 +548,7 @@ state_set_count(const struct state_set *set)
 }
 
 void
-state_set_reset(struct state_set *set, struct state_iter *it)
+state_set_reset(const struct state_set *set, struct state_iter *it)
 {
 	it->i = 0;
 	it->set = set;
@@ -609,7 +618,6 @@ state_set_rebase(struct state_set **setp, fsm_state_t base)
 		state = SINGLETON_DECODE(*setp);
 		state += base;
 
-		assert(state <= SINGLETON_MAX);
 		*setp = SINGLETON_ENCODE(state);
 		return;
 	}
@@ -628,7 +636,6 @@ state_set_replace(struct state_set **setp, fsm_state_t old, fsm_state_t new)
 	size_t i;
 
 	assert(setp != NULL);
-	assert(new <= SINGLETON_MAX);
 
 	if (IS_SINGLETON(*setp)) {
 		if (SINGLETON_DECODE(*setp) != old) {
@@ -655,7 +662,9 @@ state_set_replace(struct state_set **setp, fsm_state_t old, fsm_state_t new)
 unsigned long
 state_set_hash(const struct state_set *set)
 {
-	assert(set != NULL);
+	if (set == NULL) {
+		return 0;	/* empty */
+	}
 
 	if (IS_SINGLETON(set)) {
 		fsm_state_t state;

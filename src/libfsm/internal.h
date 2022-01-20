@@ -13,6 +13,8 @@
 #include <fsm/fsm.h>
 #include <fsm/options.h>
 
+#include "common/check.h"
+
 struct bm;
 struct edge_set;
 struct state_set;
@@ -40,6 +42,11 @@ struct state_array;
 
 #define FSM_ENDCOUNT_MAX ULONG_MAX
 
+#define FSM_CAPTURE_MAX INT_MAX
+
+/* 32-bit approximation of golden ratio, used for hashing */
+#define PHI32 0x9e3779b9
+
 struct fsm_edge {
 	fsm_state_t state; /* destination */
 	unsigned char symbol;
@@ -48,13 +55,15 @@ struct fsm_edge {
 struct fsm_state {
 	unsigned int end:1;
 
+	/* If 0, then this state has no need for checking
+	 * the fsm->capture_info struct. */
+	unsigned int has_capture_actions:1;
+
 	/* meaningful within one particular transformation only */
 	unsigned int visited:1;
 
 	struct edge_set *edges;
 	struct state_set *epsilons;
-
-	void *opaque;
 };
 
 struct fsm {
@@ -67,15 +76,17 @@ struct fsm {
 	fsm_state_t start;
 	unsigned int hasstart:1;
 
+	struct fsm_capture_info *capture_info;
+	struct endid_info *endid_info;
 	const struct fsm_options *opt;
 };
 
 void
-fsm_carryopaque_array(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
+fsm_carryopaque_array(const struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
     struct fsm *dst_fsm, fsm_state_t dst_state);
 
 void
-fsm_carryopaque(struct fsm *fsm, const struct state_set *set,
+fsm_carryopaque(const struct fsm *fsm, const struct state_set *set,
 	struct fsm *new, fsm_state_t state);
 
 struct fsm *

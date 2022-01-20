@@ -47,6 +47,11 @@ struct fsm_options {
 	 */
 	unsigned int always_hex:1;
 
+	/* boolean: true indicates to group edges with a common destination in output,
+	 * when possible, rather than printing them all individually.
+	 */
+	unsigned int group_edges:1;
+
 	/* for generated code, what kind of I/O API to generate */
 	enum fsm_io io;
 
@@ -57,16 +62,14 @@ struct fsm_options {
 	const char *cp;
 
 	/* TODO: explain. for C code fragment output */
-	int (*leaf)(FILE *, const void *state_opaque, const void *leaf_opaque);
+	int (*leaf)(FILE *, const struct fsm_end_ids *ids,
+	    const void *leaf_opaque);
 	void *leaf_opaque;
 
 	/* TODO: explain. for C code fragment output */
-	int (*endleaf)(FILE *, const void *state_opaque, const void *endleaf_opaque);
+	int (*endleaf)(FILE *, const struct fsm_end_ids *ids,
+	    const void *endleaf_opaque);
 	void *endleaf_opaque;
-
-	/* TODO: explain */
-	void (*carryopaque)(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
-		struct fsm *dst_fsm, fsm_state_t dst_state);
 
 	/* custom allocation functions */
 	const struct fsm_alloc *alloc;

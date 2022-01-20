@@ -28,12 +28,12 @@
 #include "ir.h"
 
 static int
-leaf(FILE *f, const void *state_opaque, const void *leaf_opaque)
+leaf(FILE *f, const struct fsm_end_ids *ids, const void *leaf_opaque)
 {
 	assert(f != NULL);
 	assert(leaf_opaque == NULL);
 
-	(void) state_opaque;
+	(void) ids;
 	(void) leaf_opaque;
 
 	/* XXX: this should be FSM_UNKNOWN or something non-EOF,
@@ -95,7 +95,7 @@ print_end(FILE *f, const struct dfavm_op_ir *op, const struct fsm_options *opt,
 	}
 
 	if (opt->endleaf != NULL) {
-		opt->endleaf(f, op->ir_state->opaque, opt->endleaf_opaque);
+		opt->endleaf(f, op->ir_state->end_ids, opt->endleaf_opaque);
 	} else {
 		fprintf(f, "return %lu;", (unsigned long) (op->ir_state - ir->states));
 	}
@@ -137,7 +137,7 @@ print_fetch(FILE *f, const struct fsm_options *opt)
 static int
 fsm_print_cfrag(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 	const char *cp,
-	int (*leaf)(FILE *, const void *state_opaque, const void *leaf_opaque),
+	int (*leaf)(FILE *, const struct fsm_end_ids *ids, const void *leaf_opaque),
 	const void *leaf_opaque)
 {
 	static const struct dfavm_assembler_ir zero;
@@ -228,7 +228,8 @@ fsm_print_cfrag(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 static void
 fsm_print_c_complete(FILE *f, const struct ir *ir, const struct fsm_options *opt)
 {
-	const char *cp;
+	/* TODO: currently unused, but must be non-NULL */
+	const char *cp = "";
 
 	assert(f != NULL);
 	assert(ir != NULL);
@@ -274,28 +275,34 @@ fsm_print_vmc(FILE *f, const struct fsm *fsm)
 	case FSM_IO_GETC:
 		fprintf(f, "(int (*fsm_getc)(void *opaque), void *opaque)\n");
 		fprintf(f, "{\n");
-		fprintf(f, "\tint c;\n");
-		fprintf(f, "\n");
+		if (ir->n > 0) {
+			fprintf(f, "\tint c;\n");
+			fprintf(f, "\n");
+		}
 		break;
 
 	case FSM_IO_STR:
 		fprintf(f, "(const char *s)\n");
 		fprintf(f, "{\n");
-		fprintf(f, "\tconst char *p;\n");
-		fprintf(f, "\tint c;\n");
-		fprintf(f, "\n");
-		fprintf(f, "\tp = s;\n");
-		fprintf(f, "\n");
+		if (ir->n > 0) {
+			fprintf(f, "\tconst char *p;\n");
+			fprintf(f, "\tint c;\n");
+			fprintf(f, "\n");
+			fprintf(f, "\tp = s;\n");
+			fprintf(f, "\n");
+		}
 		break;
 
 	case FSM_IO_PAIR:
 		fprintf(f, "(const char *b, const char *e)\n");
 		fprintf(f, "{\n");
-		fprintf(f, "\tconst char *p;\n");
-		fprintf(f, "\tint c;\n");
-		fprintf(f, "\n");
-		fprintf(f, "\tp = b;\n");
-		fprintf(f, "\n");
+		if (ir->n > 0) {
+			fprintf(f, "\tconst char *p;\n");
+			fprintf(f, "\tint c;\n");
+			fprintf(f, "\n");
+			fprintf(f, "\tp = b;\n");
+			fprintf(f, "\n");
+		}
 		break;
 	}
 

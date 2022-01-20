@@ -20,11 +20,13 @@
 	ast_class_id;
 	ast_count;
 	endpoint;
+	group_id;
 
 %terminals%
 
 	ANY;
 	!MANY;
+	!EOL;
 	OPT;
 	PLUS;
 	ALT;
@@ -33,6 +35,7 @@
 
 	START;
 	END;
+	!END_NL;
 
 	OPENSUB;   CLOSESUB;
 	OPENGROUP: () -> (:pos, :pos); CLOSEGROUP: () -> (:char, :pos, :pos);
@@ -50,8 +53,15 @@
 	!OPENFLAGS;
 	!CLOSEFLAGS;
 	!NEGATE;
+	!FLAG_IGNORE;
 	!FLAG_UNKNOWN;
+	!FLAG_EXTENDED: () -> (:re_flags);
+	!FLAG_SINGLE: () -> (:re_flags);
 	!FLAG_INSENSITIVE: () -> (:re_flags);
+
+	!WHITESPACE: () -> (:char, :pos, :pos);
+	!NEWLINE: () -> (:char, :pos, :pos);
+	!MAYBE_COMMENT: () -> (:char, :pos, :pos);
 
 	ESC:      () -> (:char, :pos, :pos);
 	!NOESC:   () -> (:char, :pos, :pos);
@@ -78,7 +88,10 @@
 	<count-one>:          () -> (:ast_count);
 	<count-range>: (:unsigned, :pos, :unsigned, :pos) -> (:ast_count);
 
-	<make-literal-cbrak>:    ()                       -> (:char);
+	<make-group-id>:       () -> (:group_id);
+	<make-literal-cbrak>:  () -> (:char);
+	!<make-literal-cr>:    () -> (:char);
+	!<make-literal-nl>:    () -> (:char);
 
 	<ast-range-endpoint-literal>: (:char)         -> (:endpoint);
 	<ast-range-endpoint-class>:   (:ast_class_id) -> (:endpoint);
@@ -88,7 +101,7 @@
 	<ast-make-concat>:       ()                       -> (:ast_expr);
 	<ast-make-alt>:          ()                       -> (:ast_expr);
 	<ast-make-piece>:        (:ast_expr, :ast_count)  -> (:ast_expr);
-	<ast-make-group>:        (:ast_expr)              -> (:ast_expr);
+	<ast-make-group>:        (:ast_expr, :group_id)   -> (:ast_expr);
 	!<ast-get-re-flags>:     ()                       -> (:re_flags);
 	!<ast-set-re-flags>:     (:re_flags)              -> ();
 	!<ast-mask-re-flags>:    (:re_flags, :re_flags)   -> ();
@@ -122,7 +135,8 @@
 	<mark-count>: (:pos, :pos) -> ();
 	<mark-expr>: (:ast_expr, :pos, :pos) -> ();
 
-	<class-any>: () -> (:ast_class_id);
+	<class-any>:  () -> (:ast_class_id);
+	!<class-bsr>: () -> (:ast_class_id);
 
 	expr: () -> (node :ast_expr) [
 
@@ -359,8 +373,9 @@
 				e = character-class;
 			||
 				OPENSUB;
+				id = <make-group-id>;
 				g = expr;
-				e = <ast-make-group>(g);
+				e = <ast-make-group>(g, id);
 				CLOSESUB;
 			##
 				<err-expected-atom>;

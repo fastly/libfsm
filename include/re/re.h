@@ -32,9 +32,10 @@ enum re_flags {
 	RE_TEXT    = 1 << 1,
 	RE_MULTI   = 1 << 2,
 	RE_REVERSE = 1 << 3,
-	RE_SINGLE  = 1 << 4,
+	RE_SINGLE  = 1 << 4, /* aka PCRE_DOTALL */
 	RE_ZONE    = 1 << 5,
 	RE_ANCHORED = 1 << 6,
+	RE_EXTENDED = 1 << 7,  /* PCRE extended mode */
 	RE_FLAGS_NONE = 0
 };
 
@@ -135,11 +136,11 @@ re_getchar_fun(void *opaque);
  * For example:
  *
  *     const char *s = "abc";
- *     re_comp(RE_NATIVE, fsm_sgetc, &s, 0, NULL);
+ *     re_comp(RE_NATIVE, fsm_sgetc, &s, NULL, 0, NULL);
  *
  * and:
  *
- *     re_comp(RE_NATIVE, fsm_fgetc, stdin, 0, NULL);
+ *     re_comp(RE_NATIVE, fsm_fgetc, stdin, NULL, 0, NULL);
  *
  * There's nothing special about libfsm's implementation of these; they could
  * equally well be user defined.

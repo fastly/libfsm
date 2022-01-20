@@ -16,7 +16,7 @@
 #include <fsm/fsm.h>
 #include <fsm/bool.h>
 #include <fsm/pred.h>
-#include <fsm/capture.h>
+#include <fsm/subgraph.h>
 
 #include <re/re.h>
 
@@ -372,6 +372,11 @@ decide_linking(struct comp_env *env,
 
 	switch (n->type) {
 	case AST_EXPR_EMPTY:
+		if ((n->flags & (AST_FLAG_FIRST|AST_FLAG_LAST)) == 0) {
+			return LINK_TOP_DOWN;
+		}
+		break;
+
 	case AST_EXPR_GROUP:
 		return LINK_TOP_DOWN;
 
@@ -497,7 +502,7 @@ print_linkage(enum link_types t)
     if (!fsm_addedge_any(env->fsm, (FROM), (TO))) { return 0; }
 
 #define LITERAL(FROM, TO, C)        \
-    if (!addedge_literal(env, n->re_flags, (FROM), (TO), (C))) { return 0; }
+    if (!addedge_literal(env, n->re_flags, (FROM), (TO), ((char)C))) { return 0; }
 
 #define RECURSE(FROM, TO, NODE)     \
     if (!comp_iter(env, (FROM), (TO), (NODE))) { return 0; }
@@ -546,10 +551,10 @@ comp_iter_repeated(struct comp_env *env,
 		 * build its NFA, and link to its head.
 		 */
 
-		struct fsm_capture capture;
+		struct fsm_subgraph subgraph;
 		fsm_state_t tail;
 
-		fsm_capture_start(env->fsm, &capture);
+		fsm_subgraph_start(env->fsm, &subgraph);
 
 		NEWSTATE(na);
 		NEWSTATE(nz);
@@ -562,7 +567,7 @@ comp_iter_repeated(struct comp_env *env,
 		if (min == 0) {
 			EPSILON(na, nz);
 		}
-		fsm_capture_stop(env->fsm, &capture);
+		fsm_subgraph_stop(env->fsm, &subgraph);
 		tail = nz;
 
 		if (max != AST_COUNT_UNBOUNDED) {
@@ -572,7 +577,7 @@ comp_iter_repeated(struct comp_env *env,
 				 */
 				b = tail;
 
-				if (!fsm_capture_duplicate(env->fsm, &capture, &b, &a)) {
+				if (!fsm_subgraph_duplicate(env->fsm, &subgraph, &b, &a)) {
 					return 0;
 				}
 
@@ -593,7 +598,7 @@ comp_iter_repeated(struct comp_env *env,
 				 */
 				b = tail;
 
-				if (!fsm_capture_duplicate(env->fsm, &capture, &b, &a)) {
+				if (!fsm_subgraph_duplicate(env->fsm, &subgraph, &b, &a)) {
 					return 0;
 				}
 
@@ -865,7 +870,7 @@ comp_iter(struct comp_env *env,
 		re_flags = n->re_flags;
 
 		/* wouldn't want to reverse twice! */
-		re_flags &= ~RE_REVERSE;
+		re_flags &= ~(unsigned)RE_REVERSE;
 
 		a = expr_compile(n->u.subtract.a, re_flags,
 			fsm_getoptions(env->fsm), env->err);

@@ -1,5 +1,6 @@
 .include "../../share/mk/top.mk"
 
+SRC += src/libfsm/capture.c
 SRC += src/libfsm/collate.c
 SRC += src/libfsm/complete.c
 SRC += src/libfsm/consolidate.c
@@ -8,6 +9,7 @@ SRC += src/libfsm/closure.c
 SRC += src/libfsm/edge.c
 SRC += src/libfsm/empty.c
 SRC += src/libfsm/end.c
+SRC += src/libfsm/endids.c
 SRC += src/libfsm/equal.c
 SRC += src/libfsm/exec.c
 SRC += src/libfsm/fsm.c
@@ -21,7 +23,7 @@ SRC += src/libfsm/vm.c
 
 # graph things
 SRC += src/libfsm/mergestates.c
-SRC += src/libfsm/capture.c
+SRC += src/libfsm/subgraph.c
 
 # search
 SRC += src/libfsm/shortest.c
@@ -29,7 +31,7 @@ SRC += src/libfsm/shortest.c
 # unary operators
 SRC += src/libfsm/complement.c
 SRC += src/libfsm/determinise.c
-SRC += src/libfsm/glushkovise.c
+SRC += src/libfsm/epsilons.c
 SRC += src/libfsm/minimise.c
 SRC += src/libfsm/reverse.c
 
@@ -56,7 +58,7 @@ PARSER += src/libfsm/parser.sid
 LX_CFLAGS.src/libfsm/lexer.lx += -b dyn -g fgetc
 
 # SID persistent variables are unused in some productions
-.if ${CC:T:Mgcc} || ${CC:T:Mclang}
+.if ${CC:T:Mgcc*} || ${CC:T:Mclang*}
 CFLAGS.src/libfsm/parser.c += -Wno-unused-parameter
 .endif
 
@@ -64,7 +66,7 @@ CFLAGS.src/libfsm/parser.c += -Wno-unused-parameter
 ${src}: src/libfsm/lexer.h
 .endfor
 
-.for src in ${SRC:Msrc/libfsm/closure.c} ${SRC:Msrc/libfsm/minimise.c} ${SRC:Msrc/libfsm/vm.c} ${SRC:Msrc/libfsm/example.c}
+.for src in ${SRC:Msrc/libfsm/closure.c} ${SRC:Msrc/libfsm/determinise.c} ${SRC:Msrc/libfsm/minimise.c} ${SRC:Msrc/libfsm/vm.c} ${SRC:Msrc/libfsm/example.c}
 CFLAGS.${src} += -std=c99
 DFLAGS.${src} += -std=c99
 .endfor

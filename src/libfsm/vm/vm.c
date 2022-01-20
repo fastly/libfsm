@@ -5,6 +5,7 @@
  */
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -471,5 +472,24 @@ error:
 	free(b.instr);
 
 	return NULL;
+}
+
+void
+dfavm_free_vm(struct fsm_dfavm *vm)
+{
+	if (vm == NULL) {
+		return;
+	}
+
+	if (vm->version_major == DFAVM_VARENC_MAJOR && vm->version_minor == DFAVM_VARENC_MINOR) {
+		dfavm_v1_finalize(&vm->u.v1);
+	} else if (vm->version_major == DFAVM_FIXEDENC_MAJOR && vm->version_minor == DFAVM_FIXEDENC_MINOR) {
+		dfavm_v2_finalize(&vm->u.v2);
+	} else {
+		/* invalid VM version! */
+		assert(false && "unsupported version passed in");
+	}
+
+	free(vm);
 }
 

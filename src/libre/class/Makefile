@@ -93,6 +93,8 @@ CLASS_vspace = 0A 0B 0C 0D
 CLASS_vspace_pcre = 0A 0B 0C 0D 85
 CLASS_word   = ${CLASS_alnum} _
 CLASS_xdigit = A-F a-f 0-9
+CLASS_nl     = 0A
+CLASS_bsr    = 0A 0B 0C 0D 85 # pcre \R but without crlf
 
 # would prefer to express these in terms of the above
 # (or to not need them at all)
@@ -106,7 +108,7 @@ CLASS_notword   = 00-2F 3A-40 5B-5E 60-60 7B-FF # [^[:word:]]
 CLASS_notnl     = 00-09 0B-FF             # [^\n]
 
 .for class in alnum alpha any ascii cntrl digit graph hspace hspace_pcre lower \
-	print punct space spchr upper vspace vspace_pcre word xdigit \
+	print punct space spchr upper vspace vspace_pcre word xdigit nl bsr \
 	notdigit nothspace nothspace_pcre notspace notvspace notvspace_pcre notword notnl
 
 src/libre/class/${class}.c:
@@ -120,6 +122,7 @@ SRC += src/libre/class/${class}.c
 
 .endfor
 
+.if make(gen)
 gen:: src/libre/class.h
 src/libre/class.h:
 	printf "/* generated */\n" > ${.TARGET}
@@ -151,10 +154,13 @@ src/libre/class.h:
 	done >> ${.TARGET}
 	printf "\n" >> ${.TARGET}
 	printf "#endif\n" >> ${.TARGET}
+.endif
 
+.if make(gen)
 .for src in ${SRC:Msrc/libre/class/*.c}
 gen:: ${src}
 .endfor
+.endif
 
 .for src in ${SRC:Msrc/libre/class/*.c}
 CFLAGS.${src} += -I src/libre # XXX: for class.h
@@ -172,12 +178,13 @@ ${BUILD}/lib/libre.opic: ${BUILD}/${src:R}.opic
 .endfor
 
 # libfsm generates unsigned constants which are converted to char
-.if ${CC:T:Mgcc}
+.if ${CC:T:Mgcc*}
 .for src in ${SRC:Msrc/libre/class/*.c}
 CFLAGS.${src} += -Wno-overflow
 .endfor
 .endif
 
+.if make(gen)
 gen:: src/libre/class_name.c
 src/libre/class_name.c:
 	printf "/* generated */\n" > ${.TARGET}
@@ -218,4 +225,5 @@ src/libre/class_name.c:
 	printf "\treturn NULL;\n" >> ${.TARGET}
 	printf "}\n" >> ${.TARGET}
 	printf "\n" >> ${.TARGET}
+.endif
 

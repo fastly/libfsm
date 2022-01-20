@@ -19,12 +19,19 @@
 #include "ast_analysis.h"
 #include "ast_compile.h"
 
-#if !defined(__GNUC__) && !defined(__clang__)
-#error __builtin_umul_overflow required
+#if defined(__GNUC__) || defined(__clang__)
+#define mul_overflow __builtin_umul_overflow
+#else
+static int
+mul_overflow(unsigned x, unsigned y, unsigned *res)
+{
+	*res = x * y;
+	return y != 0 && x != *res / y;
+}
 #endif
 
 static int
-rewrite(struct ast_expr *n, enum re_flags flags);
+rewrite(struct ast_expr_pool **poolp, struct ast_expr *n, enum re_flags flags);
 
 static int
 cmp(const void *_a, const void *_b)
@@ -36,11 +43,12 @@ cmp(const void *_a, const void *_b)
 }
 
 static void
-dtor(void *p)
+dtor(void *p, void *opaque)
 {
 	struct ast_expr *n = * (struct ast_expr **) p;
+	struct ast_expr_pool *pool = (struct ast_expr_pool *) opaque;
 
-	ast_expr_free(n);
+	ast_expr_free(pool, n);
 }
 
 /*
@@ -51,7 +59,8 @@ dtor(void *p)
 static size_t
 qunique(void *array, size_t elements, size_t width,
 	int (*cmp)(const void *, const void *),
-	void (*dtor)(void *))
+	void (*dtor)(void *, void *),
+	void *opaque)
 {
 	char *bytes = array;
 	size_t i, j;
@@ -68,7 +77,7 @@ qunique(void *array, size_t elements, size_t width,
 				memcpy(bytes + j * width, bytes + i * width, width);
 			}
 		} else {
-			dtor(bytes + i * width);
+			dtor(bytes + i * width, opaque);
 		}
 	}
 
@@ -115,7 +124,7 @@ compile_subexpr(struct ast_expr *e, enum re_flags flags)
 }
 
 static int
-rewrite_concat(struct ast_expr *n, enum re_flags flags)
+rewrite_concat(struct ast_expr_pool **poolp, struct ast_expr *n, enum re_flags flags)
 {
 	static const struct ast_expr zero;
 	size_t i;
@@ -125,7 +134,7 @@ rewrite_concat(struct ast_expr *n, enum re_flags flags)
 	assert(n->flags == 0x0);
 
 	for (i = 0; i < n->u.concat.count; i++) {
-		if (!rewrite(n->u.concat.n[i], flags)) {
+		if (!rewrite(poolp, n->u.concat.n[i], flags)) {
 			return 0;
 		}
 	}
@@ -133,10 +142,6 @@ rewrite_concat(struct ast_expr *n, enum re_flags flags)
 	/* a tombstone here means the entire concatenation is a tombstone */
 	for (i = 0; i < n->u.concat.count; i++) {
 		if (n->u.concat.n[i]->type == AST_EXPR_TOMBSTONE) {
-			for (i = 0; i < n->u.concat.count; i++) {
-				ast_expr_free(n->u.concat.n[i]);
-			}
-
 			goto tombstone;
 		}
 	}
@@ -144,7 +149,7 @@ rewrite_concat(struct ast_expr *n, enum re_flags flags)
 	/* remove empty children; these have no semantic effect */
 	for (i = 0; i < n->u.concat.count; ) {
 		if (n->u.concat.n[i]->type == AST_EXPR_EMPTY) {
-			ast_expr_free(n->u.concat.n[i]);
+			ast_expr_free(*poolp, n->u.concat.n[i]);
 
 			if (i + 1 < n->u.concat.count) {
 				memmove(&n->u.concat.n[i], &n->u.concat.n[i + 1],
@@ -195,7 +200,7 @@ rewrite_concat(struct ast_expr *n, enum re_flags flags)
 			n->u.concat.count += dead->u.concat.count;
 
 			dead->u.concat.count = 0;
-			ast_expr_free(dead);
+			ast_expr_free(*poolp, dead);
 
 			continue;
 		}
@@ -230,7 +235,7 @@ empty:
 tombstone:
 
 	for (i = 0; i < n->u.concat.count; i++) {
-		ast_expr_free(n->u.concat.n[i]);
+		ast_expr_free(*poolp, n->u.concat.n[i]);
 	}
 
 	free(n->u.concat.n);
@@ -242,7 +247,7 @@ tombstone:
 }
 
 static int
-rewrite_alt(struct ast_expr *n, enum re_flags flags)
+rewrite_alt(struct ast_expr_pool **poolp, struct ast_expr *n, enum re_flags flags)
 {
 	static const struct ast_expr zero;
 	size_t i;
@@ -252,7 +257,7 @@ rewrite_alt(struct ast_expr *n, enum re_flags flags)
 	assert(n->flags == 0x0);
 
 	for (i = 0; i < n->u.alt.count; i++) {
-		if (!rewrite(n->u.alt.n[i], flags)) {
+		if (!rewrite(poolp, n->u.alt.n[i], flags)) {
 			return 0;
 		}
 	}
@@ -299,7 +304,7 @@ rewrite_alt(struct ast_expr *n, enum re_flags flags)
 			n->u.alt.count += dead->u.alt.count;
 
 			dead->u.alt.count = 0;
-			ast_expr_free(dead);
+			ast_expr_free(*poolp, dead);
 
 			continue;
 		}
@@ -311,7 +316,7 @@ rewrite_alt(struct ast_expr *n, enum re_flags flags)
 	/* de-duplicate children */
 	if (n->u.alt.count > 1) {
 		qsort(n->u.alt.n, n->u.alt.count, sizeof *n->u.alt.n, cmp);
-		n->u.alt.count = qunique(n->u.alt.n, n->u.alt.count, sizeof *n->u.alt.n, cmp, dtor);
+		n->u.alt.count = qunique(n->u.alt.n, n->u.alt.count, sizeof *n->u.alt.n, cmp, dtor, *poolp);
 	}
 
 	if (n->u.alt.count == 0) {
@@ -340,18 +345,18 @@ empty:
 }
 
 static int
-rewrite_repeat(struct ast_expr *n, enum re_flags flags)
+rewrite_repeat(struct ast_expr_pool **poolp, struct ast_expr *n, enum re_flags flags)
 {
 	assert(n != NULL);
 	assert(n->type == AST_EXPR_REPEAT);
 	assert(n->flags == 0x0);
 
-	if (!rewrite(n->u.repeat.e, flags)) {
+	if (!rewrite(poolp, n->u.repeat.e, flags)) {
 		return 0;
 	}
 
 	if (n->u.repeat.e->type == AST_EXPR_EMPTY) {
-		ast_expr_free(n->u.repeat.e);
+		ast_expr_free(*poolp, n->u.repeat.e);
 
 		goto empty;
 	}
@@ -360,7 +365,7 @@ rewrite_repeat(struct ast_expr *n, enum re_flags flags)
 	 * Should never be constructed, but just in case.
 	 */
 	if (n->u.repeat.min == 0 && n->u.repeat.max == 0) {
-		ast_expr_free(n->u.repeat.e);
+		ast_expr_free(*poolp, n->u.repeat.e);
 
 		goto empty;
 	}
@@ -374,7 +379,7 @@ rewrite_repeat(struct ast_expr *n, enum re_flags flags)
 		*n = *n->u.repeat.e;
 
 		dead->type = AST_EXPR_EMPTY;
-		ast_expr_free(dead);
+		ast_expr_free(*poolp, dead);
 
 		return 1;
 	}
@@ -401,12 +406,12 @@ rewrite_repeat(struct ast_expr *n, enum re_flags flags)
 		assert(j != AST_COUNT_UNBOUNDED);
 
 		/* Bail out (i.e. with no rewriting) on overflow */
-		if (__builtin_umul_overflow(h, j, &v)) {
+		if (mul_overflow(h, j, &v)) {
 			return 1;
 		}
 		if (i == AST_COUNT_UNBOUNDED || k == AST_COUNT_UNBOUNDED) {
 			w = AST_COUNT_UNBOUNDED;
-		} else if (__builtin_umul_overflow(i, k, &w)) {
+		} else if (mul_overflow(i, k, &w)) {
 			return 1;
 		}
 
@@ -418,7 +423,7 @@ rewrite_repeat(struct ast_expr *n, enum re_flags flags)
 			n->u.repeat.e    = n->u.repeat.e->u.repeat.e;
 
 			dead->type = AST_EXPR_EMPTY;
-			ast_expr_free(dead);
+			ast_expr_free(*poolp, dead);
 
 			return 1;
 		}
@@ -446,7 +451,7 @@ rewrite_repeat(struct ast_expr *n, enum re_flags flags)
 			n->u.repeat.e   = n->u.repeat.e->u.repeat.e;
 
 			dead->type = AST_EXPR_EMPTY;
-			ast_expr_free(dead);
+			ast_expr_free(*poolp, dead);
 
 			return 1;
 		}
@@ -459,7 +464,7 @@ rewrite_repeat(struct ast_expr *n, enum re_flags flags)
 			n->u.repeat.e   = n->u.repeat.e->u.repeat.e;
 
 			dead->type = AST_EXPR_EMPTY;
-			ast_expr_free(dead);
+			ast_expr_free(*poolp, dead);
 
 			return 1;
 		}
@@ -481,13 +486,13 @@ rewrite_repeat(struct ast_expr *n, enum re_flags flags)
 	 */
 
 	if (n->u.repeat.min == 0 && n->u.repeat.e->type == AST_EXPR_TOMBSTONE) {
-		ast_expr_free(n->u.repeat.e);
+		ast_expr_free(*poolp, n->u.repeat.e);
 
 		goto empty;
 	}
 
 	if (n->u.repeat.min > 0 && n->u.repeat.e->type == AST_EXPR_TOMBSTONE) {
-		ast_expr_free(n->u.repeat.e);
+		ast_expr_free(*poolp, n->u.repeat.e);
 
 		goto tombstone;
 	}
@@ -508,7 +513,7 @@ tombstone:
 }
 
 static int
-rewrite_subtract(struct ast_expr *n, enum re_flags flags)
+rewrite_subtract(struct ast_expr_pool **poolp, struct ast_expr *n, enum re_flags flags)
 {
 	int empty;
 
@@ -516,19 +521,19 @@ rewrite_subtract(struct ast_expr *n, enum re_flags flags)
 	assert(n->type == AST_EXPR_SUBTRACT);
 	assert(n->flags == 0x0);
 
-	if (!rewrite(n->u.subtract.a, flags)) {
+	if (!rewrite(poolp, n->u.subtract.a, flags)) {
 		return 0;
 	}
 
 	/* If the lhs operand is empty, the result is always empty */
 	if (n->u.subtract.a->type == AST_EXPR_EMPTY) {
-		ast_expr_free(n->u.subtract.a);
-		ast_expr_free(n->u.subtract.b);
+		ast_expr_free(*poolp, n->u.subtract.a);
+		ast_expr_free(*poolp, n->u.subtract.b);
 
 		goto empty;
 	}
 
-	if (!rewrite(n->u.subtract.b, flags)) {
+	if (!rewrite(poolp, n->u.subtract.b, flags)) {
 		return 0;
 	}
 
@@ -580,8 +585,8 @@ rewrite_subtract(struct ast_expr *n, enum re_flags flags)
 	}
 
 	if (empty) {
-		ast_expr_free(n->u.subtract.a);
-		ast_expr_free(n->u.subtract.b);
+		ast_expr_free(*poolp, n->u.subtract.a);
+		ast_expr_free(*poolp, n->u.subtract.b);
 		goto tombstone;
 	}
 
@@ -601,7 +606,7 @@ tombstone:
 }
 
 static int
-rewrite(struct ast_expr *n, enum re_flags flags)
+rewrite(struct ast_expr_pool **poolp, struct ast_expr *n, enum re_flags flags)
 {
 	if (n == NULL) {
 		return 1;
@@ -615,25 +620,25 @@ rewrite(struct ast_expr *n, enum re_flags flags)
 		return 1;
 
 	case AST_EXPR_CONCAT:
-		return rewrite_concat(n, flags);
+		return rewrite_concat(poolp, n, flags);
 
 	case AST_EXPR_ALT:
-		return rewrite_alt(n, flags);
+		return rewrite_alt(poolp, n, flags);
 
 	case AST_EXPR_LITERAL:
 	case AST_EXPR_CODEPOINT:
 		return 1;
 
 	case AST_EXPR_REPEAT:
-		return rewrite_repeat(n, flags);
+		return rewrite_repeat(poolp, n, flags);
 
 	case AST_EXPR_GROUP:
-		if (!rewrite(n->u.group.e, flags)) {
+		if (!rewrite(poolp, n->u.group.e, flags)) {
 			return 0;
 		}
 
 		if (n->u.group.e->type == AST_EXPR_TOMBSTONE) {
-			ast_expr_free(n->u.group.e);
+			ast_expr_free(*poolp, n->u.group.e);
 
 			goto tombstone;
 		}
@@ -644,7 +649,7 @@ rewrite(struct ast_expr *n, enum re_flags flags)
 		return 1;
 
 	case AST_EXPR_SUBTRACT:
-		return rewrite_subtract(n, flags);
+		return rewrite_subtract(poolp, n, flags);
 
 	case AST_EXPR_RANGE:
 	case AST_EXPR_TOMBSTONE:
@@ -664,6 +669,6 @@ tombstone:
 int
 ast_rewrite(struct ast *ast, enum re_flags flags)
 {
-	return rewrite(ast->expr, flags);
+	return rewrite(&ast->pool, ast->expr, flags);
 }
 

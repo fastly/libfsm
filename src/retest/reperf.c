@@ -76,6 +76,8 @@
  * 				<test_name>.<subtest_name>, otherwise
  * 				<test_name>
  *
+ * Q                            stops the script, exits, reporting success.
+ *
  * Lines ending with \ are continued to the next line.
  * Both F and S directives may be omitted to measure compilation time only,
  * in which case X should still be given.
@@ -83,6 +85,10 @@
 
 static struct fsm_options opt;
 static struct fsm_vm_compile_opts vm_opts = { 0, FSM_VM_COMPILE_VM_V1, NULL };
+
+static int echo = 0;
+static int disable_comp_timing = 0;
+static int num_cycles = -1;
 
 enum match_type {
 	MATCH_NONE,
@@ -92,7 +98,7 @@ enum match_type {
 
 enum halt {
 	HALT_AFTER_COMPILE,
-	HALT_AFTER_GLUSHKOVISE,
+	HALT_AFTER_REMOVE_EPSILONS,
 	HALT_AFTER_DETERMINISE,
 	HALT_AFTER_MINIMISE,
 	HALT_AFTER_EXECUTION
@@ -119,7 +125,7 @@ struct perf_case {
 
 struct timing {
 	double comp_delta;
-	double glush_delta;
+	double rm_eps_delta;
 	double det_delta;
 	double min_delta;
 	double run_delta;
@@ -302,6 +308,14 @@ perf_case_init(struct perf_case *c, enum implementation impl)
 	c->expected_matches = 1;
 }
 
+static void
+perf_case_finalize(struct perf_case *c)
+{
+	str_free(&c->test_name);
+	str_free(&c->regexp);
+	str_free(&c->match);
+}
+
 static enum error_type
 perf_case_run(struct perf_case *c, enum halt halt,
 	struct timing *t);
@@ -345,6 +359,7 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 		char last;
 		char *b;
 		size_t len;
+		int quit;
 
 		line++;
 		len = strlen(s);
@@ -352,6 +367,13 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 		if (len == BUF_LEN - 1) {
 			fprintf(stderr, "line %zu: overflow\n", line);
 			exit(EXIT_FAILURE);
+		}
+
+		if (echo) {
+			fprintf(stderr, "ECHO>>> [len=%zu] %s", len, s);
+			if (len > 0 && s[len-1] != '\n') {
+				fprintf(stderr, "\n");
+			}
 		}
 
 		if (scont) {
@@ -369,6 +391,10 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 			if (s[len-1] == '\\') {
 				s[--len] = '\0';
 				scont = sc;
+			}
+
+			if (echo) {
+				fprintf(stderr, "ECHO::: MATCH_STRING += \"%s\"\n", s);
 			}
 
 			str_append(sc, s);
@@ -397,6 +423,7 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 			continue;
 		}
 
+		quit = 0;
 		switch (s[0]) {
 		case '#':
 			/* comment, skip */
@@ -407,12 +434,18 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 			rstrip(s, &len);
 			str_set(&c.test_name, lstrip(&s[1]));
 			c.line = line;
+			if (echo) {
+				fprintf(stderr, "ECHO::: TEST_NAME=\"%s\"\n", c.test_name.data);
+			}
 			break;
 
 		case 'D':
 			/* parse dialect */
 			rstrip(s, &len);
 			c.dialect = dialect_name(lstrip(&s[1]));
+			if (echo) {
+				fprintf(stderr, "ECHO::: DIALECT=%d (\"%s\")\n", c.dialect, lstrip(&s[1]));
+			}
 			break;
 
 		case 'M':
@@ -421,6 +454,9 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 				b++;
 			}
 			str_set(&c.regexp, b);
+			if (echo) {
+				fprintf(stderr, "ECHO::: REGEXP=/%s/\n", c.regexp.data);
+			}
 			break;
 
 		case 'S':
@@ -443,12 +479,18 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 			}
 
 			c.mt = MATCH_STRING;
+			if (echo) {
+				fprintf(stderr, "ECHO::: MATCH=STRING MATCH_STRING=\"%s\"\n", c.match.data);
+			}
 			break;
 
 		case 'F':
 			rstrip(s, &len);
 			str_set(&c.match, lstrip(&s[1]));
 			c.mt = MATCH_FILE;
+			if (echo) {
+				fprintf(stderr, "ECHO::: MATCH=FILE MATCH_PATH=\"%s\"\n", c.match.data);
+			}
 			break;
 
 		case 'N':
@@ -470,11 +512,25 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 				} else {
 					c.expected_matches = n;
 				}
+
+				if (echo) {
+					fprintf(stderr, "ECHO::: %s=%ld\n",
+						(s[0] == 'N' ? "COUNT" : "EXPECTED_MATCHES"), n);
+				}
 			}
 			break;
 
 		case 'X':
-			t.comp_delta = t.glush_delta = t.det_delta = t.min_delta = t.run_delta = 0.0;
+			if (echo) {
+				fprintf(stderr, "ECHO::: EXECUTING\n");
+			}
+
+			t.comp_delta = t.rm_eps_delta = t.det_delta = t.min_delta = t.run_delta = 0.0;
+
+			if (num_cycles > 0) {
+				c.count = num_cycles;
+			}
+
 			err = perf_case_run(&c, halt, &t);
 			if (tsv) {
 				perf_case_report_tsv(&c, halt, err, quiet, &t);
@@ -485,13 +541,25 @@ parse_perf_case(FILE *f, enum implementation impl, enum halt halt, int quiet, in
 			perf_case_reset(&c);
 			break;
 
+		case 'Q':
+			if (echo) {
+				fprintf(stderr, "ECHO::: QUIT\n");
+			}
+			quit = 1;
+			break;
+
 		default:
 			fprintf(stderr, "line %zu: unknown command '%c': %s\n", line, s[0], s);
 			exit(EXIT_FAILURE);
 		}
+
+		if (quit) {
+			break;
+		}
 	}
 
 	free(buf);
+	perf_case_finalize(&c);
 
 	return 0;
 }
@@ -588,7 +656,7 @@ perf_case_run(struct perf_case *c, enum halt halt,
 	struct fsm *fsm;
 	struct fsm_runner runner;
 	struct str contents;
-	enum error_type ret;
+	enum error_type ret = ERROR_NONE;
 	int iter;
 
 	contents = str_empty();
@@ -602,13 +670,19 @@ perf_case_run(struct perf_case *c, enum halt halt,
 
 		struct re_err comp_err;
 		enum re_flags flags;
+		int comp_count;
 
 		comp_err = err_zero;
 		flags = 0;
 
+		comp_count = c->count;
+		if (disable_comp_timing) {
+			comp_count = 1;
+		}
+
 		xclock_gettime(&c0);
 
-		for (iter=0; iter < c->count; iter++) {
+		for (iter=0; iter < comp_count; iter++) {
 			const char *re;
 
 			re = c->regexp.data;
@@ -617,11 +691,17 @@ perf_case_run(struct perf_case *c, enum halt halt,
 			if (fsm == NULL) {
 				return ERROR_PARSING_REGEXP;
 			}
+
+			if (iter < comp_count-1) {
+				fsm_free(fsm);
+			}
 		}
 
-		xclock_gettime(&c1);
+		if (!disable_comp_timing) {
+			xclock_gettime(&c1);
 
-		report_delta(&t->comp_delta, &c0, &c1);
+			report_delta(&t->comp_delta, &c0, &c1);
+		}
 	}
 
 	if (halt == HALT_AFTER_COMPILE) {
@@ -629,8 +709,8 @@ perf_case_run(struct perf_case *c, enum halt halt,
 		goto done;
 	}
 
-	if (!phase(&t->glush_delta, c->count, fsm, fsm_glushkovise)) return ERROR_GLUSHKOVISING;
-	if (halt == HALT_AFTER_GLUSHKOVISE) {
+	if (!phase(&t->rm_eps_delta, c->count, fsm, fsm_remove_epsilons)) return ERROR_REMOVING_EPSILONS;
+	if (halt == HALT_AFTER_REMOVE_EPSILONS) {
 		fsm_free(fsm);
 		goto done;
 	}
@@ -688,8 +768,6 @@ perf_case_run(struct perf_case *c, enum halt halt,
 
 		xclock_gettime(&t0);
 
-		ret = ERROR_NONE;
-
 		for (iter=0; iter < c->count; iter++) {
 			int r;
 
@@ -708,21 +786,18 @@ perf_case_run(struct perf_case *c, enum halt halt,
 			str_free(&contents);
 		}
 
-		if (ret != ERROR_NONE) {
-			fsm_runner_finalize(&runner);
-			return ret;
+		if (ret == ERROR_NONE) {
+			xclock_gettime(&t1);
+
+			report_delta(&t->run_delta, &t0, &t1);
 		}
-
-		xclock_gettime(&t1);
-
-		report_delta(&t->run_delta, &t0, &t1);
 	}
 
 done:
 
 	fsm_runner_finalize(&runner);
 
-	return ERROR_NONE;
+	return ret;
 }
 
 static void
@@ -762,9 +837,9 @@ perf_case_report_txt(struct perf_case *c, enum halt halt,
 		return;
 	}
 	if (c->count == 1) {
-		printf("glushkovise %d iterations took %.4f seconds, %.4g seconds/iteration\n",
-			c->count, t->glush_delta, t->glush_delta / c->count);
-		if (halt == HALT_AFTER_GLUSHKOVISE) {
+		printf("remove_epsilons %d iterations took %.4f seconds, %.4g seconds/iteration\n",
+			c->count, t->rm_eps_delta, t->rm_eps_delta / c->count);
+		if (halt == HALT_AFTER_REMOVE_EPSILONS) {
 			return;
 		}
 		printf("determinise %d iterations took %.4f seconds, %.4g seconds/iteration\n",
@@ -799,8 +874,8 @@ perf_case_report_head(int quiet, enum halt halt)
 	if (halt == HALT_AFTER_COMPILE) {
 		goto done;
 	}
-	printf("\tglushkovise");
-	if (halt == HALT_AFTER_GLUSHKOVISE) {
+	printf("\tremove_epsilons");
+	if (halt == HALT_AFTER_REMOVE_EPSILONS) {
 		goto done;
 	}
 	printf("\tdeterminise");
@@ -838,7 +913,7 @@ perf_case_report_tsv(struct perf_case *c, enum halt halt,
 	}
 	if (c->count != 1) {
 		printf("\t0");
-		if (halt == HALT_AFTER_GLUSHKOVISE) {
+		if (halt == HALT_AFTER_REMOVE_EPSILONS) {
 			goto done;
 		}
 		printf("\t0");
@@ -850,8 +925,8 @@ perf_case_report_tsv(struct perf_case *c, enum halt halt,
 			goto done;
 		}
 	} else {
-		printf("\t%.4g", t->glush_delta / c->count);
-		if (halt == HALT_AFTER_GLUSHKOVISE) {
+		printf("\t%.4g", t->rm_eps_delta / c->count);
+		if (halt == HALT_AFTER_REMOVE_EPSILONS) {
 			goto done;
 		}
 		printf("\t%.4g", t->det_delta / c->count);
@@ -893,8 +968,8 @@ perf_case_report_error(enum error_type err)
 		printf("ERROR: parsing regexp\n");
 		break;
 
-	case ERROR_GLUSHKOVISING:
-		printf("ERROR: glushkovising regexp\n");
+	case ERROR_REMOVING_EPSILONS:
+		printf("ERROR: removing_epsilons regexp\n");
 		break;
 
 	case ERROR_DETERMINISING:
@@ -917,6 +992,13 @@ perf_case_report_error(enum error_type err)
 		printf("ERROR: reading file: %s\n", strerror(errno));
 		break;
 
+	case ERROR_WATCHDOG:
+		/* this isn't used in reperf at the moment, just including it
+		 * to handle the complete enum
+		 */
+		printf("ERROR: watchdog timer tripped\n");
+		break;
+
 	default:
 		printf("ERROR: unknown error %d\n", (int)err);
 		break;
@@ -934,6 +1016,14 @@ usage(void)
 	fprintf(stderr, "        <driverfile> specifies the path to the driver file, or '-' to read it from stdin\n");
 
 	fprintf(stderr, "\n");
+	fprintf(stderr, "        -e\n");
+	fprintf(stderr, "             echo: echos driver script commands and how reperf interprets them\n");
+
+	fprintf(stderr, "\n");
+	fprintf(stderr, "        -C\n");
+	fprintf(stderr, "             disables profiling regexp compile time\n");
+
+	fprintf(stderr, "\n");
 	fprintf(stderr, "        -q\n");
 	fprintf(stderr, "             quiet: elide the regexp from output (useful for long regexps)\n");
 
@@ -947,7 +1037,11 @@ usage(void)
 
 	fprintf(stderr, "\n");
 	fprintf(stderr, "        -H <halt>\n");
-	fprintf(stderr, "             halt after compile, glushkovise, determinise, minimise or execute\n");
+	fprintf(stderr, "             halt after compile, remove_epsilons, determinise, minimise or execute\n");
+
+	fprintf(stderr, "\n");
+	fprintf(stderr, "        -N <cycles>\n");
+	fprintf(stderr, "             executes all tests <cycles> times, overriding any N commands in the script\n");
 
 	fprintf(stderr, "\n");
 	fprintf(stderr, "        -O <olevel>\n");
@@ -1039,7 +1133,7 @@ main(int argc, char *argv[])
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "O:L:l:x:" "pqtH:" ), c != -1) {
+		while (c = getopt(argc, argv, "h" "O:L:l:x:" "CepqtH:N:" ), c != -1) {
 			switch (c) {
 			case 'O':
 				optlevel = strtoul(optarg, NULL, 10);
@@ -1079,7 +1173,7 @@ main(int argc, char *argv[])
 				if (optarg[0] == 'c') {
 					halt = HALT_AFTER_COMPILE;
 				} else if (optarg[0] == 'g') {
-					halt = HALT_AFTER_GLUSHKOVISE;
+					halt = HALT_AFTER_REMOVE_EPSILONS;
 				} else if (optarg[0] == 'd') {
 					halt = HALT_AFTER_DETERMINISE;
 				} else if (optarg[0] == 'm') {
@@ -1106,10 +1200,30 @@ main(int argc, char *argv[])
 			case 'p': pause = 1; break;
 			case 'q': quiet = 1; break;
 			case 't': tsv   = 1; break;
+			case 'e': echo  = 1; break;
+			case 'C': disable_comp_timing = 1; break;
 
 			case 'h':
 				usage();
 				return EXIT_SUCCESS;
+
+			case 'N':
+				{
+					char *end = NULL;
+					long num;
+
+					errno = 0;
+					num = strtol(optarg, &end, 10);
+
+					if (errno != 0 || !end || *end != '\0') {
+						fprintf(stderr, "invalid argument to -N: %s\n", optarg);
+						usage();
+						exit(1);
+					}
+
+					num_cycles = num;
+				}
+				break;
 
 			case '?':
 			default:
@@ -1135,7 +1249,18 @@ main(int argc, char *argv[])
 		char buf[128];
 		printf("paused\n");
 		fflush(stdout);
-		fgets(buf, sizeof buf, stdin);
+
+		for (;;) {
+			size_t blen;
+			if (fgets(buf, sizeof buf, stdin) == NULL) {
+				break;
+			}
+
+			blen = strlen(buf);
+			if (blen == 0 || buf[blen-1] == '\n') {
+				break;
+			}
+		}
 	}
 
 	if (tsv) {

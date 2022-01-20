@@ -8,5 +8,6 @@ STAGE_COPY += include/fsm/fsm.h
 STAGE_COPY += include/fsm/options.h
 STAGE_COPY += include/fsm/pred.h
 STAGE_COPY += include/fsm/print.h
+STAGE_COPY += include/fsm/subgraph.h
 STAGE_COPY += include/fsm/walk.h
 

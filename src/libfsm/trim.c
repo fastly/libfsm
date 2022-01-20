@@ -78,6 +78,8 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 
 	fsm_state_t *ends = NULL;
 	size_t end_count = 0, end_ceil = DEF_ENDS_CEIL;
+	fsm_state_t max_end;
+
 	const size_t state_count = fsm->statecount;
 
 	size_t *offsets = NULL;
@@ -110,6 +112,9 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 	}
 
 	fsm->states[start].visited = 1;
+	if (LOG_TRIM > 0) {
+		fprintf(stderr, "mark_states: pushing %d (start)\n", start);
+	}
 	if (!queue_push(q, start)) {
 		goto cleanup;
 	}
@@ -155,6 +160,9 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 			}
 
 			if (!fsm->states[next].visited) {
+				if (LOG_TRIM > 0) {
+					fprintf(stderr, "mark_states: pushing %d (epsilon)\n", next);
+				}
 				if (!queue_push(q, next)) {
 					goto cleanup;
 				}
@@ -180,6 +188,9 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 			}
 
 			if (!fsm->states[next].visited) {
+				if (LOG_TRIM > 0) {
+					fprintf(stderr, "mark_states: pushing %d (labeled edge)\n", next);
+				}
 				if (!queue_push(q, next)) {
 					goto cleanup;
 				}
@@ -215,6 +226,8 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 	/* Sort edges by state they lead to, inverting the index. */
 	qsort(edges, edge_count, sizeof(edges[0]), cmp_edges_by_to);
 
+	max_end = 0;
+
 	/* Reuse the existing queue for a second breadth-first walk.
 	 * This assumes the queue can be reused once empty; if the
 	 * implementation changes, it may need to reset the queue or
@@ -226,6 +239,10 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 		for (e_i = 0; e_i < end_count; e_i++) {
 			const fsm_state_t end_id = ends[e_i];
 			assert(end_id < state_count);
+
+			if (end_id > max_end) {
+				max_end = end_id;
+			}
 
 			if (LOG_TRIM > 0) {
 				fprintf(stderr, "mark_states: seeding with end %d, marking visited\n",
@@ -265,8 +282,10 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 	{
 		size_t i;
 		const fsm_state_t max_to = edges[edge_count - 1].to;
+		const size_t offset_count = fsm_countstates(fsm);
+
 		offsets = f_calloc(fsm->opt->alloc,
-		    (max_to + 1), sizeof(offsets[0]));
+		    offset_count, sizeof(offsets[0]));
 		if (offsets == NULL) {
 			goto cleanup;
 		}
@@ -317,7 +336,7 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 			assert(from < state_count);
 
 			if (LOG_TRIM > 0) {
-				fprintf(stderr, "mark_states: edges[%ld]: %d, visited? %d\n",
+				fprintf(stderr, "mark_states: edges[%ld]: from: %d, visited? %d\n",
 				    e_i, from, fsm->states[from].visited);
 			}
 
@@ -332,6 +351,9 @@ mark_states(struct fsm *fsm, enum fsm_trim_mode mode,
 
 			if (!fsm->states[from].visited) {
 				fsm->states[from].visited = 1;
+				if (LOG_TRIM > 0) {
+					fprintf(stderr, "mark_states: pushing %d (reachable from ends)\n", from);
+				}
 				if (!queue_push(q, from)) {
 					goto cleanup;
 				}
@@ -424,6 +446,48 @@ sweep_states(struct fsm *fsm)
 	return (long)swept;
 }
 
+static void
+integrity_check(const char *descr, const struct fsm *fsm)
+{
+	struct state_iter state_iter;
+	fsm_state_t to;
+	const size_t count = fsm->statecount;
+	size_t s_id;
+	struct edge_iter edge_iter;
+	struct fsm_edge e;
+
+#ifdef NDEBUG
+	return;
+#endif
+
+	if (LOG_TRIM > 1) {
+		fprintf(stderr, "integrity check: %s...\n", descr);
+	}
+
+	for (s_id = 0; s_id < count; s_id++) {
+		for (state_set_reset(fsm->states[s_id].epsilons, &state_iter);
+		     state_set_next(&state_iter, &to); ) {
+			if (to >= count) {
+				fprintf(stderr, "FAILURE (state_set): s_id %lu, to %u, count %lu\n", s_id, to, count);
+				assert(to < count);
+			}
+		}
+
+		for (edge_set_reset(fsm->states[s_id].edges, &edge_iter);
+		     edge_set_next(&edge_iter, &e); ) {
+			const fsm_state_t to = e.state;
+			if (to >= count) {
+				fprintf(stderr, "FAILURE (edge_set): s_id %lu, to %u, count %lu\n", s_id, to, count);
+				assert(to < count);
+			}
+		}
+	}
+
+	if (LOG_TRIM > 1) {
+		fprintf(stderr, "integrity check: %s...PASS\n", descr);
+	}
+}
+
 long
 fsm_trim(struct fsm *fsm, enum fsm_trim_mode mode,
 	unsigned **shortest_end_distance)
@@ -434,6 +498,10 @@ fsm_trim(struct fsm *fsm, enum fsm_trim_mode mode,
 
 	fsm_state_t i;
 	assert(fsm != NULL);
+
+	if (fsm->statecount == 0) {
+		return 1;
+	}
 
 	if (shortest_end_distance != NULL
 		&& mode == FSM_TRIM_START_AND_END_REACHABLE) {
@@ -486,6 +554,8 @@ fsm_trim(struct fsm *fsm, enum fsm_trim_mode mode,
 		assert(shortest_end_distance != NULL);
 		*shortest_end_distance = sed;
 	}
+
+	integrity_check("post", fsm);
 
 	return ret;
 

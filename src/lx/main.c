@@ -6,6 +6,8 @@
 
 #define _POSIX_C_SOURCE 2
 
+#include "lx.h"
+
 #include <unistd.h>
 
 #include <assert.h>
@@ -50,7 +52,20 @@ int keep_nfa;
 struct ast_zone *cur_zone = NULL;
 unsigned zn = 0;
 int zerror = 0;
-pthread_mutex_t zmtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t zmtx = PTHREAD_MUTEX_INITIALIZER;
+
+void
+lx_mutex_lock(void)
+{
+	pthread_mutex_lock(&zmtx);
+}
+
+void
+lx_mutex_unlock(void)
+{
+	pthread_mutex_unlock(&zmtx);
+}
+
 
 static
 void usage(void)
@@ -250,124 +265,6 @@ lang_exclude(const char *name)
 	exit(EXIT_FAILURE);
 }
 
-static void
-carryopaque(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
-	struct fsm *dst_fsm, fsm_state_t dst_state)
-{
-	struct mapping_set *conflict;
-	struct ast_mapping *m;
-	size_t i;
-
-	assert(src_fsm != NULL);
-	assert(src_set != NULL);
-	assert(n > 0);
-	assert(dst_fsm != NULL);
-	assert(fsm_isend(dst_fsm, dst_state));
-	assert(fsm_getopaque(dst_fsm, dst_state) == NULL);
-
-	/*
-	 * Here we mark newly-created DFA states with the same AST mapping
-	 * as from their corresponding source NFA states. These are the mappings
-	 * which indicate which lexical token (and zone transition) is produced
-	 * from each accepting state in a particular regexp.
-	 *
-	 * Because all the accepting states are reachable together, they
-	 * should all share the same mapping. So we nominate one to use for the
-	 * opaque value and check all other accepting states are the same.
-	 */
-
-	m = NULL;
-
-	for (i = 0; i < n; i++) {
-		if (fsm_isend(src_fsm, src_set[i])) {
-			m = fsm_getopaque(src_fsm, src_set[i]);
-			break;
-		}
-	}
-
-	assert(m != NULL);
-
-	conflict = NULL;
-
-	for (i = 0; i < n; i++) {
-		struct ast_mapping *p;
-
-		/*
-		 * The opaque data is attached to end states only, so we skip
-		 * non-end states here.
-		 */
-		if (!fsm_isend(src_fsm, src_set[i])) {
-			continue;
-		}
-
-		assert(fsm_getopaque(src_fsm, src_set[i]) != NULL);
-
-		p = fsm_getopaque(src_fsm, src_set[i]);
-
-		if (m->to == p->to && m->token == p->token) {
-			continue;
-		}
-
-		if (!ast_addconflict(&conflict, p)) {
-			perror("ast_addconflict");
-			goto error;
-		}
-	}
-
-	/* if anything conflicts with m, then m is part of the conflicting set */
-	if (conflict != NULL) {
-		if (!ast_addconflict(&conflict, m)) {
-			perror("ast_addconflict");
-			goto error;
-		}
-	}
-
-	/*
-	 * An ast_mapping is allocated in order to potentially hold
-	 * conflicting mappings, if any are found.
-	 *
-	 * We can't point to an existing ast_mapping in this case,
-	 * because a conflict set may not be the same in all DFA states
-	 * where the same .to/.token are used.
-	 * This is the case for /aa(aa)+/ -> $x; /aaa(aaa)+/ -> $y;
-	 * where $y appears in both a conflicting and non-conflicting DFA state.
-	 *
-	 * If there isn't a conflict, the DFA state point to an existing
-	 * mapping. It doesn't matter which one.
-	 */
-	if (conflict == NULL) {
-		assert(m->conflict == NULL);
-
-		fsm_setopaque(dst_fsm, dst_state, m);
-	} else {
-		struct ast_mapping *new;
-
-		new = malloc(sizeof *new);
-		if (new == NULL) {
-			goto error;
-		}
-
-		new->token    = m->token;
-		new->to       = m->to;
-
-		new->fsm      = NULL;
-		new->next     = NULL;
-		new->conflict = conflict; /* private to this DFA state */
-
-		fsm_setopaque(dst_fsm, dst_state, new);
-	}
-
-	return;
-
-error:
-
-	/* XXX: free conflict set */
-
-	fsm_setopaque(dst_fsm, dst_state, NULL);
-
-	return;
-}
-
 static int
 zone_equal(const struct ast_zone *a, const struct ast_zone *b)
 {
@@ -402,7 +299,7 @@ zone_equal(const struct ast_zone *a, const struct ast_zone *b)
 		return -1;
 	}
 
-	q = fsm_union(x, y);
+	q = fsm_union(x, y, NULL);
 	if (q == NULL) {
 		fsm_free(x);
 		fsm_free(y);
@@ -410,14 +307,14 @@ zone_equal(const struct ast_zone *a, const struct ast_zone *b)
 	}
 
 	{
-		opt.carryopaque = carryopaque;
+		/* opt.carryopaque = carryopaque; */
 
 		if (!fsm_determinise(q)) {
 			fsm_free(q);
 			return -1;
 		}
 
-		opt.carryopaque = NULL;
+		/* opt.carryopaque = NULL; */
 	}
 
 	{
@@ -429,7 +326,11 @@ zone_equal(const struct ast_zone *a, const struct ast_zone *b)
 				continue;
 			}
 
-			m = fsm_getopaque(q, i);
+			m = ast_getendmapping(q, i);
+
+			if (LOG()) {
+				fprintf(stderr, "zone_equal: asserting ast_getendmapping(q, state %d) != NULL: %p\n", i, (void *)m);
+			}
 			assert(m != NULL);
 
 			if (m->conflict != NULL) {
@@ -489,7 +390,7 @@ zone_minimise(void *arg)
 
 		for (m = z->ml; m != NULL; m = m->next) {
 			fsm_state_t ms;
-			fsm_state_t base_z, base_m;
+			struct fsm_combine_info combine_info;
 
 			assert(m->fsm != NULL);
 
@@ -509,11 +410,18 @@ zone_minimise(void *arg)
 			}
 
 			/* Attach this mapping to each end state for this FSM */
-			fsm_setendopaque(m->fsm, m);
+			if (LOG()) {
+				fprintf(stderr, "zone_minimise: ast_setendmapping(m->fsm, m: %p)\n",
+				    (void *)m);
+			}
+
+			if (!ast_setendmapping(m->fsm, m)) {
+				assert(!"failed");
+			}
 
 			(void) fsm_getstart(m->fsm, &ms);
 
-			z->fsm = fsm_merge(z->fsm, m->fsm, &base_z, &base_m);
+			z->fsm = fsm_merge(z->fsm, m->fsm, &combine_info);
 			if (z->fsm == NULL) {
 				pthread_mutex_lock(&zmtx);
 				zerror = errno;
@@ -525,8 +433,8 @@ zone_minimise(void *arg)
 			m->fsm = NULL;
 #endif
 
-			ms    += base_m;
-			start += base_z;
+			ms    += combine_info.base_b;
+			start += combine_info.base_a;
 
 			if (!fsm_addedge_epsilon(z->fsm, start, ms)) {
 				pthread_mutex_lock(&zmtx);
@@ -617,6 +525,8 @@ run_threads(int concurrency, void *(*fn)(void *))
 		}
 	}
 
+	free(tds);
+
 	return 0;
 }
 
@@ -630,7 +540,7 @@ main(int argc, char *argv[])
 	print = lx_print_c;
 	keep_nfa = 0;
 	print_progress = 0;
-	concurrency = 4;
+	concurrency = 1;
 
 	/* TODO: populate options */
 	opt.anonymous_states  = 1;
@@ -779,12 +689,12 @@ main(int argc, char *argv[])
 				zn = 0;
 			}
 
-			opt.carryopaque = carryopaque;
+			/* opt.carryopaque = carryopaque; */
 			cur_zone = ast->zl;
 			if (run_threads(concurrency, zone_determinise)) {
 				return EXIT_FAILURE;
 			}
-			opt.carryopaque = NULL;
+			/* opt.carryopaque = NULL; */
 
 			if (print_progress) {
 				fprintf(stderr, "\n");
@@ -846,7 +756,10 @@ main(int argc, char *argv[])
 								continue;
 							}
 
-							m = fsm_getopaque(q->fsm, i);
+							m = ast_getendmapping(q->fsm, i);
+							if (LOG()) {
+								fprintf(stderr, "main: m <- ast_getendmapping(dst_fsm, i]: %d) = %p    // remove duplicate zones?\n", i, (void *)m);
+							}
 							assert(m != NULL);
 
 							if (m->to == *p) {
@@ -937,7 +850,10 @@ main(int argc, char *argv[])
 					continue;
 				}
 
-				m = fsm_getopaque(z->fsm, i);
+				m = ast_getendmapping(z->fsm, i);
+				if (LOG()) {
+					fprintf(stderr, "main: m <- ast_getendmapping(dst_fsm, i]: %d) = %p    // pick up conflicts\n", i, (void *)m);
+				}
 				assert(m != NULL);
 
 				if (m->conflict != NULL) {
@@ -1016,7 +932,10 @@ main(int argc, char *argv[])
 					continue;
 				}
 
-				m = fsm_getopaque(z->fsm, i);
+				m = ast_getendmapping(z->fsm, i);
+				if (LOG()) {
+					fprintf(stderr, "main: m <- ast_getendmapping(dst_fsm, i]: %d) = %p     // free conflicts\n", i, (void *)m);
+				}
 				if (m != NULL) {
 					assert(m->fsm == NULL);
 
@@ -1044,3 +963,7 @@ main(int argc, char *argv[])
 	return EXIT_SUCCESS;
 }
 
+/* XXX: we're not interested in leaks in lx for the moment; ASAN is applied
+ * for the libraries only. cleanup for lx's own structures should be addressed
+ * at some point; excluding this is sloppy, but it's less important right now. */
+const char * __asan_default_options() { return "detect_leaks=0"; }
