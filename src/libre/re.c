@@ -36,12 +36,12 @@ re_dialect(enum re_dialect dialect)
 	size_t i;
 
 	static const struct dialect a[] = {
-		{ RE_LIKE,    parse_re_like,    0, RE_ANCHORED },
-		{ RE_LITERAL, parse_re_literal, 0, RE_ANCHORED },
-		{ RE_GLOB,    parse_re_glob,    0, RE_ANCHORED },
-		{ RE_NATIVE,  parse_re_native,  0, 0           },
-		{ RE_PCRE,    parse_re_pcre,    0, 0           },
-		{ RE_SQL,     parse_re_sql,     1, RE_ANCHORED }
+		{ RE_LIKE,    parse_re_like,    0, RE_SINGLE | RE_ANCHORED },
+		{ RE_LITERAL, parse_re_literal, 0, RE_SINGLE | RE_ANCHORED },
+		{ RE_GLOB,    parse_re_glob,    0, RE_SINGLE | RE_ANCHORED },
+		{ RE_NATIVE,  parse_re_native,  0, 0                       },
+		{ RE_PCRE,    parse_re_pcre,    0, 0                       },
+		{ RE_SQL,     parse_re_sql,     1, RE_SINGLE | RE_ANCHORED }
 	};
 
 	for (i = 0; i < sizeof a / sizeof *a; i++) {
@@ -68,7 +68,7 @@ re_flags(const char *s, enum re_flags *f)
 
 	for (p = s; *p != '\0'; p++) {
 		if (*p & RE_ANCHOR) {
-			*f &= ~RE_ANCHOR;
+			*f &= (unsigned)~RE_ANCHOR;
 		}
 
 		switch (*p) {
@@ -96,7 +96,6 @@ re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 {
 	const struct dialect *m;
 	struct ast *ast = NULL;
-	struct ast_expr_pool *pool = NULL;
 	enum ast_analysis_res res;
 	
 	assert(getc != NULL);
@@ -109,19 +108,16 @@ re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 
 	flags |= m->flags;
 
-	ast = m->parse(getc, opaque, opt, &pool, flags, m->overlap, err);
+	ast = m->parse(getc, opaque, opt, flags, m->overlap, err);
 
 	if (ast == NULL) {
-		ast_pool_free(pool);
 		return NULL;
 	}
 
 	if (!ast_rewrite(ast, flags)) {
-		ast_pool_free(pool);
+		ast_free(ast);
 		return NULL;
 	}
-
-	ast->pool = pool;
 
 	/* Do a complete pass over the AST, filling in other details. */
 	res = ast_analysis(ast);
@@ -158,7 +154,9 @@ re_comp(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 	flags |= m->flags;
 
 	ast = re_parse(dialect, getc, opaque, opt, flags, err, &unsatisfiable);
-	if (ast == NULL) { return NULL; }
+	if (ast == NULL) {
+		return NULL;
+	}
 
 	/*
 	 * If the RE is inherently unsatisfiable, then free the
@@ -167,7 +165,7 @@ re_comp(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 	 * that unioning it with other regexes will still work.
 	 */
 	if (unsatisfiable) {
-		ast_expr_free(ast->expr);
+		ast_expr_free(ast->pool, ast->expr);
 		/* ast_free below frees the pool */
 
 		ast->expr = ast_expr_tombstone;

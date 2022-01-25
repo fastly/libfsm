@@ -248,6 +248,7 @@
 		}
 
 		@f |= RE_ANCHORED; /* regexps in lx are implicitly anchored */
+		@f |= RE_SINGLE;   /* we can't assume we're lexing text */
 	@};
 
 %actions%
@@ -329,8 +330,8 @@
 
 		for (m = @z->ml; m != NULL; m = m->next) {
 			struct fsm *fsm;
-			fsm_state_t base_r, base_fsm;
 			fsm_state_t ms;
+			struct fsm_combine_info combine_info;
 
 			if (m->token == NULL) {
 				continue;
@@ -348,21 +349,14 @@
 
 			(void) fsm_getstart(fsm, &ms);
 
-			/*
-			 * We don't want to take these with us, because the output here is a
-			 * general-purpose FSM for which no mapping has yet been made,
-			 * so that it can be used in expressions as for any pattern.
-			 */
-			fsm_setendopaque(fsm, NULL);
-
-			@r = fsm_merge(@r, fsm, &base_r, &base_fsm);
+			@r = fsm_merge(@r, fsm, &combine_info);
 			if (@r == NULL) {
 				perror("fsm_union");
 				@!;
 			}
 
-			ms    += base_fsm;
-			start += base_r;
+			ms    += combine_info.base_b;
+			start += combine_info.base_a;
 
 			if (!fsm_addedge_epsilon(@r, start, ms)) {
 				perror("fsm_addedge_epsilon");
@@ -701,7 +695,7 @@
 		assert(@a != NULL);
 		assert(@b != NULL);
 
-		@q = fsm_concat(@a, @b);
+		@q = fsm_concat(@a, @b, NULL);
 		if (@q == NULL) {
 			perror("fsm_concat");
 			@!;
@@ -740,7 +734,7 @@
 		assert(@a != NULL);
 		assert(@b != NULL);
 
-		@q = fsm_union(@a, @b);
+		@q = fsm_union(@a, @b, NULL);
 		if (@q == NULL) {
 			perror("fsm_union");
 			@!;

@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include <fsm/fsm.h>
+#include <fsm/capture.h>
 #include <fsm/pred.h>
 #include <fsm/walk.h>
 
@@ -22,13 +23,33 @@
 #include <adt/mappinghashset.h>
 
 #include "internal.h"
+#include "capture.h"
+#include "endids.h"
 
 #define LOG_MAPPING 0
+#define LOG_CONSOLIDATE_CAPTURES 0
+#define LOG_CONSOLIDATE_ENDIDS 0
 
 struct mapping_closure {
 	size_t count;
 	const fsm_state_t *mapping;
 };
+
+struct consolidate_copy_capture_actions_env {
+	char tag;
+	struct fsm *dst;
+	size_t mapping_count;
+	const fsm_state_t *mapping;
+	int ok;
+};
+
+static int
+consolidate_copy_capture_actions(struct fsm *dst, struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count);
+
+static int
+consolidate_end_ids(struct fsm *dst, struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count);
 
 static fsm_state_t
 mapping_cb(fsm_state_t id, const void *opaque)
@@ -94,8 +115,6 @@ fsm_consolidate(struct fsm *src,
 		if (!DST_SEEN(dst_i)) {
 			SET_DST_SEEN(dst_i);
 
-			dst->states[dst_i].opaque = src->states[src_i].opaque;
-
 			if (!state_set_copy(&dst->states[dst_i].epsilons,
 				dst->opt->alloc, src->states[src_i].epsilons)) {
 				goto cleanup;
@@ -109,43 +128,20 @@ fsm_consolidate(struct fsm *src,
 				goto cleanup;
 			}
 			edge_set_compact(&dst->states[dst_i].edges,
-			    mapping_cb, &closure);
+			    dst->opt->alloc, mapping_cb, &closure);
 
 			if (fsm_isend(src, src_i)) {
 				fsm_setend(dst, dst_i, 1);
 			}
-		} else {
-			const int is_end = fsm_isend(dst, dst_i);
-			fsm_state_t prev_i;
-			fsm_state_t prev_src_id = src->statecount; /* NONE */
-			fsm_state_t src_set[2];
-
-			if (!is_end) {
-				continue;
-			}
-			assert(fsm_isend(src, src_i));
-
-			/* Find the previous state that also maps to this
-			 * state, to carry the opaque from it. This could
-			 * become expensive when there are a very high number
-			 * of states, so it may be worth keeping a temporary
-			 * second mapping for just the end states. */
-			for (prev_i = 0; prev_i < mapping_count; prev_i++) {
-				if (mapping[prev_i] == dst_i) {
-					prev_src_id = prev_i;
-					break;
-				}
-			}
-			assert(prev_src_id < src->statecount);
-
-			src_set[0] = prev_src_id;
-			src_set[1] = src_i;
-
-			/* call carryopaque pairwise */
-			fsm_carryopaque_array(src,
-			    src_set, 2,
-			    dst, dst_i);
 		}
+	}
+
+	if (!consolidate_copy_capture_actions(dst, src, mapping, mapping_count)) {
+		goto cleanup;
+	}
+
+	if (!consolidate_end_ids(dst, src, mapping, mapping_count)) {
+		goto cleanup;
 	}
 
 	{
@@ -165,4 +161,127 @@ cleanup:
 
 	if (seen != NULL) { f_free(src->opt->alloc, seen); }
 	return NULL;
+}
+
+static int
+consolidate_copy_capture_actions_cb(fsm_state_t state,
+    enum capture_action_type type, unsigned capture_id, fsm_state_t to,
+    void *opaque)
+{
+	struct consolidate_copy_capture_actions_env *env = opaque;
+	fsm_state_t s, t;
+
+	assert(env->tag == 'C');
+
+#if LOG_CONSOLIDATE_CAPTURES
+	fprintf(stderr, "consolidate_copy_capture_actions_cb: state %u, type %s, ID %u, TO %d\n",
+	    state,
+	    fsm_capture_action_type_name[type],
+	    capture_id, to);
+#endif
+
+	assert(state < env->mapping_count);
+	assert(to == CAPTURE_NO_STATE || to < env->mapping_count);
+	s = env->mapping[state];
+	t = to == CAPTURE_NO_STATE
+	    ? CAPTURE_NO_STATE : env->mapping[to];
+
+	if (!fsm_capture_add_action(env->dst,
+		s, type, capture_id, t)) {
+		env->ok = 0;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+consolidate_copy_capture_actions(struct fsm *dst, struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count)
+{
+	size_t i;
+
+	struct consolidate_copy_capture_actions_env env;
+	env.tag = 'C';
+	env.dst = dst;
+	env.mapping_count = mapping_count;
+	env.mapping = mapping;
+	env.ok = 1;
+
+#if LOG_MAPPING
+	for (i = 0; i < mapping_count; i++) {
+		fprintf(stderr, "mapping[%lu]: %u\n", i, mapping[i]);
+	}
+#else
+	(void)i;
+#endif
+
+	fsm_capture_action_iter(src,
+	    consolidate_copy_capture_actions_cb, &env);
+	return env.ok;
+}
+
+struct consolidate_end_ids_env {
+	char tag;
+	struct fsm *dst;
+	struct fsm *src;
+	const fsm_state_t *mapping;
+	size_t mapping_count;
+	int ok;
+};
+
+static int
+consolidate_end_ids_cb(fsm_state_t state, const fsm_end_id_t id,
+    void *opaque)
+{
+	struct consolidate_end_ids_env *env = opaque;
+	enum fsm_endid_set_res sres;
+	fsm_state_t s;
+	assert(env->tag == 'C');
+
+#if LOG_CONSOLIDATE_ENDIDS > 1
+	fprintf(stderr, "consolidate_end_ids_cb: state %u, count %lu, ID %d:",
+	    state, id);
+	for (i = 0; i < count; i++) {
+		fprintf(stderr, " %u", ids[i]);
+	}
+	fprintf(stderr, "\n");
+#endif
+
+	assert(state < env->mapping_count);
+	s = env->mapping[state];
+
+#if LOG_CONSOLIDATE_ENDIDS > 1
+	fprintf(stderr, "consolidate[%d] <- %d\n", s, id);
+#endif
+
+	sres = fsm_endid_set(env->dst, s, id);
+	if (sres == FSM_ENDID_SET_ERROR_ALLOC_FAIL) {
+		env->ok = 0;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+consolidate_end_ids(struct fsm *dst, struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count)
+{
+	struct consolidate_end_ids_env env;
+	env.tag = 'C';		/* for Consolidate */
+	env.dst = dst;
+	env.src = src;
+	env.mapping = mapping;
+	env.mapping_count = mapping_count;
+	env.ok = 1;
+
+	fsm_endid_iter(src, consolidate_end_ids_cb, &env);
+
+#if LOG_CONSOLIDATE_ENDIDS > 1
+	fprintf(stderr, "==== fsm_consolidate -- endid_info after:\n");
+	fsm_endid_dump(stderr, dst);
+#endif
+
+	return env.ok;
 }

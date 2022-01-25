@@ -19,13 +19,10 @@
 
 #define LOG_CONCAT_FLAGS 0
 
-struct analysis_env {
-	unsigned group_id;
-};
-
 struct anchoring_env {
 	char past_any_consuming;
 	char followed_by_consuming;
+	struct ast_expr_pool *pool;
 };
 
 static int
@@ -57,7 +54,7 @@ set_flags(struct ast_expr *n, enum ast_flags flags)
 }
 
 static enum ast_analysis_res
-analysis_iter(struct analysis_env *env, struct ast_expr *n)
+analysis_iter(struct ast_expr *n)
 {
 	switch (n->type) {
 	case AST_EXPR_EMPTY:
@@ -77,7 +74,7 @@ analysis_iter(struct analysis_env *env, struct ast_expr *n)
 			if (is_nullable(n)) {
 				set_flags(n->u.concat.n[i], AST_FLAG_NULLABLE);
 			}
-			analysis_iter(env, n->u.concat.n[i]);
+			analysis_iter(n->u.concat.n[i]);
 		}
 
 		break;
@@ -87,7 +84,7 @@ analysis_iter(struct analysis_env *env, struct ast_expr *n)
 		size_t i;
 
 		for (i = 0; i < n->u.alt.count; i++) {
-			analysis_iter(env, n->u.alt.n[i]);
+			analysis_iter(n->u.alt.n[i]);
 			/* spread nullability upward */
 			if (is_nullable(n->u.alt.n[i])) {
 				set_flags(n, AST_FLAG_NULLABLE);
@@ -114,7 +111,7 @@ analysis_iter(struct analysis_env *env, struct ast_expr *n)
 			set_flags(e, AST_FLAG_NULLABLE);
 		}
 
-		analysis_iter(env, e);
+		analysis_iter(e);
 
 		if (is_nullable(e)) {
 			set_flags(n, AST_FLAG_NULLABLE);
@@ -129,11 +126,7 @@ analysis_iter(struct analysis_env *env, struct ast_expr *n)
 			set_flags(e, AST_FLAG_NULLABLE);
 		}
 
-		/* assign group ID */
-		env->group_id++;
-		n->u.group.id = env->group_id;
-
-		analysis_iter(env, e);
+		analysis_iter(e);
 
 		if (is_nullable(e)) {
 			set_flags(n, AST_FLAG_NULLABLE);
@@ -161,7 +154,7 @@ analysis_iter(struct analysis_env *env, struct ast_expr *n)
 }
 
 static int
-always_consumes_input(const struct ast_expr *n, int thud)
+always_consumes_input(const struct ast_expr *n)
 {
 	if (is_nullable(n)) {
 		return 0;
@@ -186,7 +179,7 @@ always_consumes_input(const struct ast_expr *n, int thud)
 		size_t i;
 
 		for (i = 0; i < n->u.concat.count; i++) {
-			if (always_consumes_input(n->u.concat.n[i], thud)) {
+			if (always_consumes_input(n->u.concat.n[i])) {
 				return 1;
 			}
 		}
@@ -198,7 +191,7 @@ always_consumes_input(const struct ast_expr *n, int thud)
 		size_t i;
 
 		for (i = 0; i < n->u.alt.count; i++) {
-			if (!always_consumes_input(n->u.alt.n[i], thud)) {
+			if (!always_consumes_input(n->u.alt.n[i])) {
 				return 0;
 			}
 		}
@@ -208,17 +201,13 @@ always_consumes_input(const struct ast_expr *n, int thud)
 
 	case AST_EXPR_REPEAT:
 		/* not nullable, so check the repeated node */
-		return always_consumes_input(n->u.repeat.e, thud);
+		return always_consumes_input(n->u.repeat.e);
 
 	case AST_EXPR_ANCHOR:
 		return 0;
 
 	case AST_EXPR_GROUP:
-		if (thud) {
-			return 1; /* FIXME */
-		}
-
-		return always_consumes_input(n->u.group.e, thud);
+		return always_consumes_input(n->u.group.e);
 
 	default:
 		return 0;
@@ -343,7 +332,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 			 */
 			if (!env->followed_by_consuming) {
 				for (j = i + 1; j < n->u.concat.count; j++) {
-					if (always_consumes_input(n->u.concat.n[j], 0)) {
+					if (always_consumes_input(n->u.concat.n[j])) {
 						env->followed_by_consuming = 1;
 						break;
 					}
@@ -378,7 +367,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 				/* prune unsatisfiable branch */
 				struct ast_expr *doomed = n->u.alt.n[i];
 				n->u.alt.n[i] = ast_expr_tombstone;
-				ast_expr_free(doomed);
+				ast_expr_free(env->pool, doomed);
 				continue;
 			} else if (res == AST_ANALYSIS_OK) {
 				any_sat = 1;
@@ -414,7 +403,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 		/* TODO: maybe do the analysis before rewriting? */
 
 		if (res == AST_ANALYSIS_UNSATISFIABLE && n->u.repeat.min == 0) {
-			ast_expr_free(n->u.repeat.e);
+			ast_expr_free(env->pool, n->u.repeat.e);
 
 			n->type = AST_EXPR_EMPTY;
 			set_flags(n, AST_FLAG_NULLABLE);
@@ -462,6 +451,9 @@ assign_firsts(struct ast_expr *n)
 {
 	switch (n->type) {
 	case AST_EXPR_EMPTY:
+		set_flags(n, AST_FLAG_FIRST);
+		break;
+
 	case AST_EXPR_TOMBSTONE:
 		break;
 
@@ -483,7 +475,7 @@ assign_firsts(struct ast_expr *n)
 			struct ast_expr *child = n->u.concat.n[i];
 			assign_firsts(child);
 
-			if (always_consumes_input(child, 1) || is_start_anchor(child)) {
+			if (always_consumes_input(child) || is_start_anchor(child)) {
 				break;
 			}
 		}
@@ -534,6 +526,9 @@ assign_lasts(struct ast_expr *n)
 {
 	switch (n->type) {
 	case AST_EXPR_EMPTY:
+		set_flags(n, AST_FLAG_LAST);
+		break;
+
 	case AST_EXPR_TOMBSTONE:
 		break;
 
@@ -552,13 +547,17 @@ assign_lasts(struct ast_expr *n)
 
 		set_flags(n, AST_FLAG_LAST);
 
-		/* iterate in reverse, break on rollover */
-		for (i = n->u.concat.count - 1; i < n->u.concat.count; i--) {
-			struct ast_expr *child = n->u.concat.n[i];
-			assign_lasts(child);
-			if (always_consumes_input(child, 1) || is_end_anchor(child)) {
-				break;
-			}
+		/* iterate in reverse */
+		i = n->u.concat.count;
+		if (i > 0) {
+			do {
+				i--;
+				struct ast_expr *child = n->u.concat.n[i];
+				assign_lasts(child);
+				if (always_consumes_input(child) || is_end_anchor(child)) {
+					break;
+				}
+			} while (i > 0);
 		}
 		break;
 	}
@@ -615,17 +614,11 @@ ast_analysis(struct ast *ast)
 
 	/*
 	 * First pass -- track nullability, clean up some artifacts from
-	 * parsing, assign group IDs.
+	 * parsing.
 	 */
-	{
-		struct analysis_env env;
-
-		memset(&env, 0x00, sizeof(env));
-
-		res = analysis_iter(&env, ast->expr);
-		if (res != AST_ANALYSIS_OK) {
-			return res;
-		}
+	res = analysis_iter(ast->expr);
+	if (res != AST_ANALYSIS_OK) {
+		return res;
 	}
 
 	/*
@@ -645,6 +638,7 @@ ast_analysis(struct ast *ast)
 	{
 		struct anchoring_env env;
 		memset(&env, 0x00, sizeof(env));
+		env.pool = ast->pool;
 		res = analysis_iter_anchoring(&env, ast->expr);
 		if (res != AST_ANALYSIS_OK) { return res; }
 	}

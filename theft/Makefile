@@ -6,8 +6,9 @@ SRC += theft/util.c
 SRC += theft/wrap.c
 
 SRC += theft/fuzz_adt_edge_set.c
+SRC += theft/fuzz_adt_ipriq.c
 SRC += theft/fuzz_adt_priq.c
-SRC += theft/fuzz_adt_set.c
+SRC += theft/fuzz_capture_string_set.c
 SRC += theft/fuzz_literals.c
 SRC += theft/fuzz_minimise.c
 SRC += theft/fuzz_nfa.c
@@ -17,18 +18,17 @@ SRC += theft/fuzz_re_parser_pcre.c
 SRC += theft/fuzz_trim.c
 
 SRC += theft/type_info_adt_edge_set.c
+SRC += theft/type_info_capture_string_set.c
 SRC += theft/type_info_dfa.c
 SRC += theft/type_info_fsm_literal.c
 SRC += theft/type_info_nfa.c
 SRC += theft/type_info_re.c
 SRC += theft/type_info_re_literal.c
 SRC += theft/type_info_re_pcre.c
+SRC += theft/type_info_adt_ipriq.c
 SRC += theft/type_info_adt_priq.c
-SRC += theft/type_info_adt_set.c
 
 #PROPNAME.theft += adt_priq_operations
-#PROPNAME.theft += adt_set_equality
-#PROPNAME.theft += adt_set_operations
 PROPNAME.theft += adt
 
 PROPNAME.theft += nfa_edge_order_should_not_matter
@@ -44,7 +44,7 @@ PROPNAME.theft += union_literals
 .for src in ${SRC:Mtheft/*.c}
 CFLAGS.${src} += -D_POSIX_C_SOURCE=200809L
 CFLAGS.${src} += -std=c99
-.if ${CC:T:Mgcc} || ${CC:T:Mclang}
+.if ${CC:T:Mgcc*} || ${CC:T:Mclang*}
 .endif
 .endfor
 
@@ -63,7 +63,7 @@ INCDIR.${src:Mtheft/*.c} += src/adt
 .endfor
 
 # not all concrete set interfaces use all static functions from set.inc
-.if ${CC:T:Mgcc} || ${CC:T:Mclang}
+.if ${CC:T:Mgcc*} || ${CC:T:Mclang*}
 .for src in ${SRC:Mtheft/*_adt_set.c}
 CFLAGS.${src:Mtheft/*.c} += -Wno-unused-function
 .endfor

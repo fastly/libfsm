@@ -1,0 +1,22 @@
+#
+# Copyright 2008-2017 Katherine Flavel
+#
+# See LICENCE for the full copyright terms.
+#
+
+0 -> 1 "\n";
+0 -> 1 "\r";
+0 -> 1 "\v";
+0 -> 1 "\f";
+0 -> 1 "\x85";
+0 -> 3 "\r";
+3 -> 1 "\n";
+
+1 -> 2 "R";
+3 -> 2 "R";
+
+2 -> 4 "\n";
+
+start: 0;
+end: 2, 4;
+

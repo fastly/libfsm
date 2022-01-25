@@ -31,6 +31,26 @@ fsm_reverse(struct fsm *fsm)
 	assert(fsm != NULL);
 	assert(fsm->opt != NULL);
 
+	/*
+	 * Reversing an FSM means to reverse the language the FSM matches.
+	 * The textbook approach to this is to mark the start state as accepting,
+	 * mark the accepting states as a new start state, and flip all the edges:
+	 *
+	 *    ⟶ ○ ⟶ ○ ⟶ ○ ⟶ ◎
+	 *              ↺
+	 *
+	 * reversed:     
+	 *
+	 *      ◎ ← ○ ← ○ ← ○ ←
+	 *              ↻
+	 *
+	 * However this doesn't explain what to do with a set of multiple accepting
+	 * states (since an FSM may only have one start state). In general these
+	 * can be unioned by epsilon transitions from a single newly-introduced
+	 * start state. In this implementation we attempt to avoid introducing
+	 * that new state where possible.
+	 */
+
 	if (fsm->endcount == 0 || !fsm_getstart(fsm, &prevstart)) {
 		struct fsm *new;
 
@@ -222,7 +242,6 @@ fsm_reverse(struct fsm *fsm)
 			fsm_setend(fsm, end, 1);
 
 			/* TODO: if we keep a fsm-wide endset, we can use it verbatim here */
-			fsm_carryopaque(fsm, endset, fsm, end);
 		}
 
 		for (state_set_reset(endset, &it); state_set_next(&it, &s); ) {
@@ -231,7 +250,6 @@ fsm_reverse(struct fsm *fsm)
 			}
 
 			fsm_setend(fsm, s, 0);
-			fsm->states[s].opaque = NULL;
 		}
 	}
 
@@ -242,7 +260,6 @@ fsm_reverse(struct fsm *fsm)
 	if (state_set_count(endset) > 1 && !hasepsilons && state_set_has(fsm, endset, fsm_isend)) {
 		assert(!fsm_isend(fsm, start));
 		fsm_setend(fsm, start, 1);
-		fsm_carryopaque(fsm, endset, fsm, start);
 	}
 
 	{

@@ -45,7 +45,7 @@
  */
 
 struct match {
-	int i;
+	fsm_end_id_t i;
 	const char *s;
 	struct match *next;
 };
@@ -107,6 +107,7 @@ print_name(const char *name,
 		ast_print *print_ast;
 	} a[] = {
 		{ "api",    fsm_print_api,    NULL },
+		{ "awk",    fsm_print_awk,    NULL },
 		{ "c",      fsm_print_c,      NULL },
 		{ "dot",    fsm_print_dot,    NULL },
 		{ "fsm",    fsm_print_fsm,    NULL },
@@ -259,6 +260,47 @@ struct matches_list {
 static struct matches_list *all_matches = NULL;
 
 static struct match *
+find_match_with_id(fsm_end_id_t id)
+{
+	struct matches_list *res = all_matches;
+	while (res != NULL) {
+		struct match *m = res->head;
+		if (m->i == id) {
+			return m;
+		}
+		res = res->next;
+	}
+	return NULL;
+}
+
+static struct match *
+find_first_match_for_end_state(const struct fsm *dfa, fsm_state_t s)
+{
+#define MAX_END_IDS 8		/* FIXME: what is reasonable here? */
+	fsm_end_id_t end_id_buf[MAX_END_IDS];
+	size_t end_ids_written;
+	enum fsm_getendids_res res;
+
+	if (!fsm_isend(dfa, s)) {
+		return NULL;
+	}
+
+	res = fsm_getendids(dfa, s, MAX_END_IDS,
+	    end_id_buf, &end_ids_written);
+	if (res == FSM_GETENDIDS_ERROR_INSUFFICIENT_SPACE) {
+		fprintf(stderr, "Error: Multiple end IDs\n");
+		return NULL;
+	} else if (res == FSM_GETENDIDS_NOT_FOUND) {
+		return NULL;
+	} else {
+		assert(res == FSM_GETENDIDS_FOUND);
+		/* continues below */
+	}
+
+	return find_match_with_id(end_id_buf[0]);
+}
+
+static struct match *
 addmatch(struct match **head, int i, const char *s)
 {
 	struct match *new;
@@ -345,65 +387,6 @@ free_all_matches(void)
 }
 
 static void
-carryopaque(struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
-	struct fsm *dst_fsm, fsm_state_t dst_state)
-{
-	struct match *matches;
-	struct match *m;
-	size_t i;
-
-	assert(src_fsm != NULL);
-	assert(src_set != NULL);
-	assert(n > 0);
-	assert(dst_fsm != NULL);
-	assert(fsm_isend(dst_fsm, dst_state));
-	assert(fsm_getopaque(dst_fsm, dst_state) == NULL);
-
-	/*
-	 * Here we mark newly-created DFA states with the same regexp string
-	 * as from their corresponding source NFA states.
-	 *
-	 * Because all the accepting states are reachable together, they
-	 * should all share the same regexp, unless re(1) was invoked with
-	 * a regexp which is a subset of (or equal to) another.
-	 */
-
-	matches = NULL;
-
-	for (i = 0; i < n; i++) {
-		/*
-		 * The opaque data is attached to end states only, so we skip
-		 * non-end states here.
-		 */
-		if (!fsm_isend(src_fsm, src_set[i])) {
-			continue;
-		}
-
-		assert(fsm_getopaque(src_fsm, src_set[i]) != NULL);
-
-		for (m = fsm_getopaque(src_fsm, src_set[i]); m != NULL; m = m->next) {
-			if (!addmatch(&matches, m->i, m->s)) {
-				perror("addmatch");
-				goto error;
-			}
-		}
-	}
-
-	add_matches_list(matches);
-	fsm_setopaque(dst_fsm, dst_state, matches);
-
-	return;
-
-error:
-
-	/* XXX: free matches */
-
-	fsm_setopaque(dst_fsm, dst_state, NULL);
-
-	return;
-}
-
-static void
 printexample(FILE *f, const struct fsm *fsm, fsm_state_t state)
 {
 	char buf[256]; /* TODO */
@@ -424,12 +407,13 @@ printexample(FILE *f, const struct fsm *fsm, fsm_state_t state)
 }
 
 static int
-endleaf_c(FILE *f, const void *state_opaque, const void *endleaf_opaque)
+endleaf_c(FILE *f, const struct fsm_end_ids *end_ids,
+    const void *endleaf_opaque)
 {
 	const struct match *m;
 	int n;
+	size_t i, end_ids_count;
 
-	assert(state_opaque != NULL);
 	assert(endleaf_opaque == NULL);
 
 	(void) f;
@@ -437,19 +421,25 @@ endleaf_c(FILE *f, const void *state_opaque, const void *endleaf_opaque)
 
 	n = 0;
 
-	for (m = state_opaque; m != NULL; m = m->next) {
-		n |= 1 << m->i;
+	end_ids_count = (end_ids == NULL ? 0 : end_ids->count);
+
+	for (i = 0; i < end_ids_count; i++) {
+		for (m = find_match_with_id(end_ids->ids[i]); m != NULL; m = m->next) {
+			n |= 1 << m->i;
+		}
 	}
 
 	fprintf(f, "return %#x;", (unsigned) n);
 
 	fprintf(f, " /* ");
 
-	for (m = state_opaque; m != NULL; m = m->next) {
-		fprintf(f, "\"%s\"", m->s); /* XXX: escape string (and comment) */
+	for (i = 0; i < end_ids_count; i++) {
+		for (m = find_match_with_id(end_ids->ids[i]); m != NULL; m = m->next) {
+			fprintf(f, "\"%s\"", m->s); /* XXX: escape string (and comment) */
 
-		if (m->next != NULL) {
-			fprintf(f, ", ");
+			if (m->next != NULL || i < end_ids_count - 1) {
+				fprintf(f, ", ");
+			}
 		}
 	}
 
@@ -459,23 +449,70 @@ endleaf_c(FILE *f, const void *state_opaque, const void *endleaf_opaque)
 }
 
 static int
-endleaf_dot(FILE *f, const void *state_opaque, const void *endleaf_opaque)
+endleaf_rust(FILE *f, const struct fsm_end_ids *end_ids,
+    const void *endleaf_opaque)
 {
 	const struct match *m;
+	int n;
+	size_t i, end_ids_count;
+
+	assert(endleaf_opaque == NULL);
+
+	(void) f;
+	(void) endleaf_opaque;
+
+	n = 0;
+
+	end_ids_count = (end_ids == NULL ? 0 : end_ids->count);
+
+	for (i = 0; i < end_ids_count; i++) {
+		for (m = find_match_with_id(end_ids->ids[i]); m != NULL; m = m->next) {
+			n |= 1 << m->i;
+		}
+	}
+
+	fprintf(f, "return Some(%#x)", (unsigned) n);
+
+	fprintf(f, " /* ");
+
+	for (i = 0; i < end_ids_count; i++) {
+		for (m = find_match_with_id(end_ids->ids[i]); m != NULL; m = m->next) {
+			fprintf(f, "\"%s\"", m->s); /* XXX: escape string (and comment) */
+
+			if (m->next != NULL || i < end_ids_count - 1) {
+				fprintf(f, ", ");
+			}
+		}
+	}
+
+	fprintf(f, " */");
+
+	return 0;
+}
+
+static int
+endleaf_dot(FILE *f, const struct fsm_end_ids *end_ids,
+    const void *endleaf_opaque)
+{
+	const struct match *m;
+	size_t i, end_ids_count;
 
 	assert(f != NULL);
-	assert(state_opaque != NULL);
 	assert(endleaf_opaque == NULL);
 
 	(void) endleaf_opaque;
 
 	fprintf(f, "label = <");
 
-	for (m = state_opaque; m != NULL; m = m->next) {
-		fprintf(f, "#%u", m->i);
+	end_ids_count = (end_ids == NULL ? 0 : end_ids->count);
 
-		if (m->next != NULL) {
-			fprintf(f, ",");
+	for (i = 0; i < end_ids_count; i++) {
+		for (m = find_match_with_id(end_ids->ids[i]); m != NULL; m = m->next) {
+			fprintf(f, "#%u", m->i);
+
+			if (m->next != NULL || i < end_ids_count - 1) {
+				fprintf(f, ",");
+			}
 		}
 	}
 
@@ -487,11 +524,13 @@ endleaf_dot(FILE *f, const void *state_opaque, const void *endleaf_opaque)
 #if 0
 	fprintf(f, " # ");
 
-	for (m = state_opaque; m != NULL; m = m->next) {
-		fprintf(f, "\"%s\"", m->s); /* XXX: escape string (and comment) */
+	for (i = 0; i < end_ids_count; i++) {
+		for (m = find_match_with_id(end_ids->ids[i]); m != NULL; m = m->next) {
+			fprintf(f, "\"%s\"", m->s); /* XXX: escape string (and comment) */
 
-		if (m->next != NULL) {
-			fprintf(f, ", ");
+			if (m->next != NULL || i < end_ids_count - 1) {
+				fprintf(f, ", ");
+			}
 		}
 	}
 
@@ -502,23 +541,28 @@ endleaf_dot(FILE *f, const void *state_opaque, const void *endleaf_opaque)
 }
 
 static int
-endleaf_json(FILE *f, const void *state_opaque, const void *endleaf_opaque)
+endleaf_json(FILE *f, const struct fsm_end_ids *end_ids,
+    const void *endleaf_opaque)
 {
 	const struct match *m;
+	size_t i, end_ids_count;
 
 	assert(f != NULL);
-	assert(state_opaque != NULL);
 	assert(endleaf_opaque == NULL);
 
 	(void) endleaf_opaque;
 
 	fprintf(f, "[ ");
 
-	for (m = state_opaque; m != NULL; m = m->next) {
-		fprintf(f, "%u", m->i);
+	end_ids_count = (end_ids == NULL ? 0 : end_ids->count);
 
-		if (m->next != NULL) {
-			fprintf(f, ", ");
+	for (i = 0; i < end_ids_count; i++) {
+		for (m = find_match_with_id(end_ids->ids[i]); m != NULL; m = m->next) {
+			fprintf(f, "%u", m->i);
+
+			if (m->next != NULL) {
+				fprintf(f, ", ");
+			}
 		}
 	}
 
@@ -543,10 +587,38 @@ do_fsm_cleanup(void)
 	free_all_matches();
 }
 
+static void
+parse_flags(const char *arg, enum re_flags *flags)
+{
+	for (; *arg; arg++) {
+		switch (*arg) {
+		case 'i':
+			*flags = *flags | RE_ICASE;
+			break;
+
+		case 's':
+			*flags = *flags | RE_SINGLE;
+			break;
+
+		case 'x':
+			*flags = *flags | RE_EXTENDED;
+			break;
+
+		/* others? */
+
+		default:
+			printf("unknown flag '%c'\n", *arg);
+			usage();
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+
 int
 main(int argc, char *argv[])
 {
-	struct fsm *(*join)(struct fsm *, struct fsm *);
+	struct fsm *(*join)(struct fsm *, struct fsm *,
+	    struct fsm_combine_info *);
 	int (*query)(const struct fsm *, const struct fsm *);
 	fsm_print *print_fsm;
 	ast_print *print_ast;
@@ -591,7 +663,7 @@ main(int argc, char *argv[])
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:" "upMmnfxyz"), c != -1) {
+		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:F:" "upMmnfxyz"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 0;          break;
 			case 'c': opt.consolidate_edges = 0;          break;
@@ -609,6 +681,10 @@ main(int argc, char *argv[])
 
 			case 'l':
 				print_name(optarg, &print_fsm, &print_ast);
+				break;
+
+			case 'F':
+				parse_flags(optarg, &flags);
 				break;
 
 			case 'p': print_fsm = fsm_print_fsm;        break;
@@ -815,31 +891,25 @@ main(int argc, char *argv[])
 			}
 
 			{
-				size_t s;
+				struct match *matches = NULL;
 
 				/*
 				 * Attach this mapping to each end state for this regexp.
 				 * XXX: we should share the same matches struct for all end states
 				 * in the same regexp, and keep an argc-sized array of pointers to free().
-				 * XXX: then use fsm_setendopaque() here.
 				 */
-				for (s = 0; s < new->statecount; s++) {
-					if (fsm_isend(new, s)) {
-						struct match *matches;
-
-						matches = NULL;
-
-						if (!addmatch(&matches, i, argv[i])) {
-							perror("addmatch");
-							return EXIT_FAILURE;
-						}
-
-						add_matches_list(matches);
-
-						assert(fsm_getopaque(new, s) == NULL);
-						fsm_setopaque(new, s, matches);
-					}
+				if (!fsm_setendid(new, i)) {
+					perror("fsm_setendid");
+					return EXIT_FAILURE;
 				}
+
+				if (!addmatch(&matches, i, argv[i])) {
+					perror("addmatch");
+					return EXIT_FAILURE;
+				}
+
+				add_matches_list(matches);
+
 			}
 
 			/* TODO: implement concatenating patterns for -s in conjunction with -z.
@@ -853,7 +923,7 @@ main(int argc, char *argv[])
 				}
 			}
 
-			fsm = join(fsm, new);
+			fsm = join(fsm, new, NULL);
 			if (fsm == NULL) {
 				perror("fsm_union/concat");
 				return EXIT_FAILURE;
@@ -902,26 +972,20 @@ main(int argc, char *argv[])
 		}
 
 		{
-			opt.carryopaque = carryopaque;
-
 			if (!fsm_determinise(dfa)) {
 				perror("fsm_determinise");
 				return EXIT_FAILURE;
 			}
-
-			opt.carryopaque = NULL;
 		}
 
 		for (s = 0; s < dfa->statecount; s++) {
 			const struct match *matches;
-
-			if (!fsm_isend(dfa, s)) {
+			matches = find_first_match_for_end_state(dfa, s);
+			if (matches == NULL) {
 				continue;
 			}
 
-			matches = fsm_getopaque(dfa, s);
 			assert(matches != NULL);
-
 			if (matches->next != NULL) {
 				const struct match *m;
 
@@ -952,8 +1016,6 @@ main(int argc, char *argv[])
 	}
 
 	if (!keep_nfa) {
-		opt.carryopaque = carryopaque;
-
 		/*
 		 * Convert to a DFA, then minimise unless we need to keep the end
 		 * state information separated per regexp. */
@@ -968,8 +1030,6 @@ main(int argc, char *argv[])
 				return EXIT_FAILURE;
 			}
 		}
-
-		opt.carryopaque = NULL;
 
 		if (makevm) {
 			vm = fsm_vm_compile(fsm);
@@ -987,15 +1047,15 @@ main(int argc, char *argv[])
 			/* TODO: would deal with dialect: prefix here, too */
 			if (patterns) {
 				const struct match *m;
+				m = find_first_match_for_end_state(fsm, s);
 
-				assert(fsm_getopaque(fsm, s) != NULL);
-
-				for (m = fsm_getopaque(fsm, s); m != NULL; m = m->next) {
+				while (m != NULL) {
 					/* TODO: print nicely */
 					printf("/%s/", m->s);
 					if (m->next != NULL) {
 						printf(", ");
 					}
+					m = m->next;
 				}
 
 				printf(": ");
@@ -1016,6 +1076,8 @@ main(int argc, char *argv[])
 
 		if (print_fsm == fsm_print_c || print_fsm == fsm_print_vmc) {
 			opt.endleaf = endleaf_c;
+		} else if (print_fsm == fsm_print_rust) {
+			opt.endleaf = endleaf_rust;
 		} else if (print_fsm == fsm_print_dot || print_fsm == fsm_print_vmdot) {
 			opt.endleaf = patterns ? endleaf_dot : NULL;
 		} else if (print_fsm == fsm_print_json) {
@@ -1025,7 +1087,7 @@ main(int argc, char *argv[])
 		print_fsm(stdout, fsm);
 
 /* XXX: free fsm */
-		
+
 		if (vm != NULL) {
 			fsm_vm_free(vm);
 		}
@@ -1058,7 +1120,7 @@ main(int argc, char *argv[])
 					if (vm != NULL) {
 						e = fsm_vm_match_file(vm, f);
 					} else {
-						e = fsm_exec(fsm, fsm_fgetc, f, &state);
+						e = fsm_exec(fsm, fsm_fgetc, f, &state, NULL);
 					}
 
 					fclose(f);
@@ -1070,7 +1132,7 @@ main(int argc, char *argv[])
 					if (vm != NULL) {
 						e = fsm_vm_match_buffer(vm, s, strlen(s));
 					} else {
-						e = fsm_exec(fsm, fsm_sgetc, &s, &state);
+						e = fsm_exec(fsm, fsm_sgetc, &s, &state, NULL);
 					}
 				}
 
@@ -1081,12 +1143,11 @@ main(int argc, char *argv[])
 
 				if (patterns) {
 					const struct match *m;
-
-					assert(fsm_getopaque(fsm, state) != NULL);
-
-					for (m = fsm_getopaque(fsm, state); m != NULL; m = m->next) {
+					m = find_first_match_for_end_state(fsm, state);
+					while (m != NULL) {
 						/* TODO: print nicely */
 						printf("match: /%s/\n", m->s);
+						m = m->next;
 					}
 				}
 			}
@@ -1104,4 +1165,3 @@ main(int argc, char *argv[])
 		return r;
 	}
 }
-

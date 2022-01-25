@@ -21,6 +21,7 @@
 #include "libfsm/internal.h" /* XXX */
 #include "libfsm/print/ir.h" /* XXX */
 
+#include "lx/lx.h"
 #include "lx/ast.h"
 #include "lx/print.h"
 
@@ -28,7 +29,7 @@
 int
 fsm_print_cfrag(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 	const char *cp,
-	int (*leaf)(FILE *, const void *state_opaque, const void *leaf_opaque),
+	int (*leaf)(FILE *, const struct fsm_end_ids *ids, const void *leaf_opaque),
 	const void *opaque);
 
 static int
@@ -43,7 +44,11 @@ skip(const struct fsm *fsm, fsm_state_t state)
 		return 1;
 	}
 
-	m = fsm_getopaque(fsm, state);
+	m = ast_getendmapping(fsm, state);
+	if (LOG()) {
+		fprintf(stderr, "fsm_print_cfrag: ast_getendmapping for state %d: %p\n",
+		    state, (void *)m);
+	}
 	assert(m != NULL);
 
 	if (m->token == NULL) {
@@ -103,7 +108,11 @@ shortest_example(const struct fsm *fsm, const struct ast_token *token,
 			continue;
 		}
 
-		m = fsm_getopaque(fsm, i);
+		m = ast_getendmapping(fsm, i);
+		if (LOG()) {
+			fprintf(stderr, "shortest_example: ast_getendmapping for state %d: %p\n",
+			    i, (void *)m);
+		}
 		if (m == NULL) {
 			continue;
 		}
@@ -129,7 +138,7 @@ shortest_example(const struct fsm *fsm, const struct ast_token *token,
 }
 
 static int
-leaf(FILE *f, const void *state_opaque, const void *leaf_opaque)
+leaf(FILE *f, const struct fsm_end_ids *ids, const void *leaf_opaque)
 {
 	const struct ast *ast;
 	const struct ast_mapping *m;
@@ -138,7 +147,12 @@ leaf(FILE *f, const void *state_opaque, const void *leaf_opaque)
 
 	assert(ast != NULL);
 
-	m = state_opaque;
+	if (ids == NULL) {
+		m = NULL;
+	} else {
+		assert(ids->count > 0);
+		m = ast_getendmappingbyendid(ids->ids[0]);
+	}
 
 	if (m == NULL) {
 		/* XXX: don't need this if complete */
@@ -455,7 +469,7 @@ print_buf(FILE *f)
 		fprintf(f, "\n");
 		fprintf(f, "\tassert(t != NULL);\n");
 		fprintf(f, "\n");
-		fprintf(f, "\tif (t->p == t->a + t->len) {\n");
+		fprintf(f, "\tif (t->a == NULL || t->p == t->a + t->len) {\n"); /* (t->a == NULL || ...) is to appease ubsan */
 		fprintf(f, "\t\tsize_t len;\n");
 		fprintf(f, "\t\tptrdiff_t off;\n");
 		fprintf(f, "\t\tchar *tmp;\n");
@@ -740,7 +754,7 @@ print_zone(FILE *f, const struct ast *ast, const struct ast_zone *z)
 
 			fprintf(f, "\t\tdefault:\n");
 			fprintf(f, "\t\t\tif (lx->push != NULL) {\n");
-			fprintf(f, "\t\t\t\tif (-1 == lx->push(lx->buf_opaque, %s)) {\n", opt.cp);
+			fprintf(f, "\t\t\t\tif (-1 == lx->push(lx->buf_opaque, (char)%s)) {\n", opt.cp);
 			fprintf(f, "\t\t\t\t\treturn %sERROR;\n", prefix.tok);
 			fprintf(f, "\t\t\t\t}\n");
 			fprintf(f, "\t\t\t}\n");
@@ -751,7 +765,7 @@ print_zone(FILE *f, const struct ast *ast, const struct ast_zone *z)
 		} else {
 			fprintf(f, "\n");
 			fprintf(f, "\t\tif (lx->push != NULL) {\n");
-			fprintf(f, "\t\t\tif (-1 == lx->push(lx->buf_opaque, %s)) {\n", opt.cp);
+			fprintf(f, "\t\t\tif (-1 == lx->push(lx->buf_opaque, (char)%s)) {\n", opt.cp);
 			fprintf(f, "\t\t\t\treturn %sERROR;\n", prefix.tok);
 			fprintf(f, "\t\t\t}\n");
 			fprintf(f, "\t\t}\n");
@@ -793,7 +807,11 @@ print_zone(FILE *f, const struct ast *ast, const struct ast_zone *z)
 				continue;
 			}
 
-			m = fsm_getopaque(z->fsm, i);
+			m = ast_getendmapping(z->fsm, i);
+			if (LOG()) {
+				fprintf(stderr, "print_zone: ast_getendmapping for state %d: %p (c)\n",
+				    i, (void *)m);
+			}
 			assert(m != NULL);
 
 			fprintf(f, "\tcase S%u: return ", (unsigned) i);

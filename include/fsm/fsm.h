@@ -18,6 +18,8 @@
 struct fsm;
 struct fsm_options;
 struct path; /* XXX */
+struct fsm_capture;
+struct fsm_combine_info;
 
 /*
  * States in libfsm are referred to by a 0-based numeric index.
@@ -25,6 +27,17 @@ struct path; /* XXX */
  * supposed to be private, and may be changed.
  */
 typedef unsigned int fsm_state_t;
+
+/* FSMs can have an opaque numeric identifier associated with
+ * their end states. These can be used to determine which of the
+ * original FSM(s) matched when executing a combined FSM. */
+typedef unsigned int fsm_end_id_t;
+
+/* struct used to return a collection of end IDs. */
+struct fsm_end_ids {
+	unsigned count;
+	fsm_end_id_t ids[1];
+};
 
 /*
  * Create a new FSM. This is to be freed with fsm_free(). A structure allocated
@@ -75,13 +88,16 @@ fsm_move(struct fsm *dst, struct fsm *src);
 /*
  * Merge states from a and b. This is a memory-management operation only;
  * the storage for the two sets of states is combined, but no edges are added.
+ * a and b can appear in the merged FSM in either order.
  *
  * The resulting FSM has two disjoint sets, and no start state.
- * Cannot return NULL.
+ *
+ * If non-NULL, the combine_info struct will be updated to note the new
+ * base offsets for the pair of FSMs.
  */
 struct fsm *
 fsm_merge(struct fsm *a, struct fsm *b,
-	fsm_state_t *base_a, fsm_state_t *base_b);
+	struct fsm_combine_info *combine_info);
 
 /*
  * Add a state.
@@ -100,7 +116,7 @@ fsm_addstate_bulk(struct fsm *fsm, size_t n);
  /*
  * Remove a state. Any edges transitioning to this state are also removed.
  */
-void
+int
 fsm_removestate(struct fsm *fsm, fsm_state_t state);
 
 /* Use the state passed in via opaque to determine whether the state[id]
@@ -174,23 +190,40 @@ fsm_findmode(const struct fsm *fsm, fsm_state_t state, unsigned int *freq);
 void
 fsm_setend(struct fsm *fsm, fsm_state_t state, int end);
 
-/*
- * Set data associated with all end states.
- */
-void
-fsm_setendopaque(struct fsm *fsm, void *opaque);
+/* Associate a numeric ID with the end states in an fsm.
+ * This can be used to track which of the original fsms matched
+ * input when multiple fsms are combined.
+ *
+ * These will be preserved through the following operations:
+ * - determinise
+ * - union
+ * - concat
+ * - ...
+ * */
+int
+fsm_setendid(struct fsm *fsm, fsm_end_id_t id);
 
-/*
- * Set data associated with an end state.
- */
-void
-fsm_setopaque(struct fsm *fsm, fsm_state_t state, void *opaque);
+/* Get the end IDs associated with an end state, if any.
+ * If id_buf has enough cells to store all the end IDs (according
+ * to id_buf_count) then they are written into id_buf[] and
+ * *ids_written is set to the number of IDs. The end IDs in the
+ * buffer may appear in any order, but should not have duplicates.
+ *
+ * Returns 0 if there is not enough space in id_buf for the
+ * end IDs, or 1 if zero or more end IDs were returned. */
+enum fsm_getendids_res {
+	FSM_GETENDIDS_NOT_FOUND,
+	FSM_GETENDIDS_FOUND,
+	FSM_GETENDIDS_ERROR_INSUFFICIENT_SPACE = -1
+};
+enum fsm_getendids_res
+fsm_getendids(const struct fsm *fsm, fsm_state_t end_state,
+    size_t id_buf_count, fsm_end_id_t *id_buf,
+    size_t *ids_written);
 
-/*
- * Get data associated with an end state.
- */
-void *
-fsm_getopaque(const struct fsm *fsm, fsm_state_t state);
+/* Get the number of end IDs associated with an end state. */
+size_t
+fsm_getendidcount(const struct fsm *fsm, fsm_state_t end_state);
 
 /*
  * Find the state (if there is just one), or add epsilon edges from all states,
@@ -301,7 +334,7 @@ fsm_reverse(struct fsm *fsm);
  * Returns false on error; see errno.
  */
 int
-fsm_glushkovise(struct fsm *fsm);
+fsm_remove_epsilons(struct fsm *fsm);
 
 /*
  * Convert an fsm to a DFA.
@@ -330,7 +363,8 @@ fsm_minimise(struct fsm *fsm);
  * Concatenate b after a. This is not commutative.
  */
 struct fsm *
-fsm_concat(struct fsm *a, struct fsm *b);
+fsm_concat(struct fsm *a, struct fsm *b,
+	struct fsm_combine_info *combine_info);
 
 /*
  * Return 1 if the fsm does not match anything;
@@ -382,7 +416,7 @@ fsm_shortest(const struct fsm *fsm,
  */
 int
 fsm_exec(const struct fsm *fsm, int (*fsm_getc)(void *opaque), void *opaque,
-	fsm_state_t *end);
+	fsm_state_t *end, struct fsm_capture *captures);
 
 /*
  * Callbacks which may be passed to fsm_exec(). These are conveniences for

@@ -27,11 +27,13 @@
 	ast_class_id;
 	ast_count;
 	endpoint;
+	group_id;
 
 %terminals%
 
 	ANY;
 	!MANY;
+	EOL;
 	OPT;
 	PLUS;
 	ALT;
@@ -40,6 +42,7 @@
 
 	START;
 	END;
+	END_NL;
 
 	OPEN; CLOSE;
 	OPENGROUP: () -> (:pos, :pos); CLOSEGROUP: () -> (:char, :pos, :pos);
@@ -56,8 +59,15 @@
 
 	FLAGS; SUB;
 	NEGATE;
+	FLAG_IGNORE;
 	FLAG_UNKNOWN;
 	FLAG_INSENSITIVE: () -> (:re_flags);
+	FLAG_EXTENDED: () -> (:re_flags);
+	FLAG_SINGLE: () -> (:re_flags);
+
+	!WHITESPACE: () -> (:char, :pos, :pos);
+	!NEWLINE: () -> (:char, :pos, :pos);
+	!MAYBE_COMMENT: () -> (:char, :pos, :pos);
 
 	ESC:     () -> (:char, :pos, :pos);
 	NOESC:  () -> (:char, :pos, :pos);
@@ -86,7 +96,10 @@
 	<count-one>:          () -> (:ast_count);
 	<count-range>: (:unsigned, :pos, :unsigned, :pos) -> (:ast_count);
 
-	<make-literal-cbrak>:   ()                        -> (:char);
+	<make-group-id>:      () -> (:group_id);
+	<make-literal-cbrak>: () -> (:char);
+	<make-literal-cr>:    () -> (:char);
+	<make-literal-nl>:    () -> (:char);
 
 	<ast-range-endpoint-literal>: (:char)         -> (:endpoint);
 	<ast-range-endpoint-class>:   (:ast_class_id) -> (:endpoint);
@@ -96,7 +109,7 @@
 	<ast-make-concat>:       ()                       -> (:ast_expr);
 	<ast-make-alt>:          ()                       -> (:ast_expr);
 	<ast-make-piece>:        (:ast_expr, :ast_count)  -> (:ast_expr);
-	<ast-make-group>:        (:ast_expr)              -> (:ast_expr);
+	<ast-make-group>:        (:ast_expr, :group_id)   -> (:ast_expr);
 	<ast-get-re-flags>:      ()                       -> (:re_flags);
 	<ast-set-re-flags>:      (:re_flags)              -> ();
 	<ast-mask-re-flags>:     (:re_flags, :re_flags)   -> ();
@@ -129,6 +142,7 @@
 	<mark-expr>: (:ast_expr, :pos, :pos) -> ();
 
 	<class-any>: () -> (:ast_class_id);
+	<class-bsr>: () -> (:ast_class_id);
 
 	expr: () -> (node :ast_expr) [
 		literal: () -> (node :ast_expr) = {
@@ -169,6 +183,9 @@
 					/* TODO: just construct the AST here;
 					 * complain about unsupported things at a later stage */
 					<err-unsupported>;
+				||
+					(c, !, !) = UNSUPPORTED;
+					<err-unsupported>;
 				};
 
 				node = <ast-make-literal>(c);
@@ -191,6 +208,9 @@
 						(c, start, end) = CHAR;
 					||
 						(c, start, end) = CONTROL;
+						<err-unsupported>;
+					||
+						(c, start, end) = UNSUPPORTED;
 						<err-unsupported>;
 					};
 					r = <ast-range-endpoint-literal>(c);
@@ -377,6 +397,15 @@
 				c = FLAG_INSENSITIVE;
 				o = <re-flag-union>(i, c);
 			||
+				c = FLAG_SINGLE;
+				o = <re-flag-union>(i, c);
+			||
+				c = FLAG_EXTENDED;
+				o = <re-flag-union>(i, c);
+			||
+				FLAG_IGNORE;
+				o = i;
+			||
 				FLAG_UNKNOWN;
 				o = i;
 				<err-unknown-flag>;
@@ -434,9 +463,64 @@
 				END;
 				e = <ast-make-anchor-end>;
 			||
+				END_NL;
+
+				/*
+				 * From the PCRE spec:
+				 * "The dollar character is an assertion that is true only if the current
+				 * matching point is at the end of the subject string, or immediately before
+				 * a newline at the end of the string (by default). Note, however, that it
+				 * does not actually match the newline."
+				 *
+				 * We emulate this behaviour by constructing an AST subtree equivalent to \n?$
+				 *
+				 * TODO: This applies for single-line mode only. For multiline mode,
+				 * I think this should be a single ast-make-anchor-end, per usual.
+				 * TODO: We'll also need to avoid this inside a capturing group, perhaps by
+				 * dissalowing it here, or perhaps by rewriting 
+				 */
+				nl = <make-literal-nl>;
+				enl = <ast-make-literal>(nl);
+				c = <count-zero-or-one>;
+				optnl = <ast-make-piece>(enl, c);
+				a = <ast-make-anchor-end>;
+				e = <ast-make-concat>;
+				<ast-add-concat>(e, optnl);
+				<ast-add-concat>(e, a);
+			||
 				ANY;
 				a = <class-any>;
 				e = <ast-make-named>(a);
+			||
+				/*                                                             
+				 * The meaning of \R depends on both the current character set
+				 * (i.e. unicode or not) and on the current line-ending convention
+				 * (which is configurable) within a regexp.
+				 * TODO: We'll need to address that conditionally here. For the moment
+				 * we only construct an AST node for the default convention.
+				 *
+				 * class_nl is incorrect for pcre's \R which for ascii contains
+				 * not just a set of codepoints, but also a concatenation of crlf,
+				 * so we can't actually just use a class here.
+				 */
+				EOL;
+
+				/* TODO: or the unicode equivalent */
+
+				class_bsr = <class-bsr>;
+				bsr = <ast-make-named>(class_bsr);
+
+				crlf = <ast-make-concat>;
+				cr = <make-literal-cr>;
+				ecr = <ast-make-literal>(cr);
+				nl = <make-literal-nl>;
+				enl = <ast-make-literal>(nl);
+				<ast-add-concat>(crlf, ecr);
+				<ast-add-concat>(crlf, enl);
+
+				e = <ast-make-alt>;
+				<ast-add-alt>(e, crlf);
+				<ast-add-alt>(e, bsr);
 			||
 				e = literal;
 			||
@@ -448,9 +532,10 @@
 			||
 				OPEN;
 				flags = <ast-get-re-flags>();
+				id = <make-group-id>;
 				g = expr;
 				<ast-set-re-flags>(flags);
-				e = <ast-make-group>(g);
+				e = <ast-make-group>(g, id);
 				CLOSE;
 			##
 				<err-expected-atom>;
