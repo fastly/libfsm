@@ -354,6 +354,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 	case AST_EXPR_ALT: {
 		int any_sat;
 		size_t i;
+		int all_set_past_any_consuming = n->u.alt.count > 0;
 
 		any_sat = 0;
 
@@ -370,6 +371,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 				ast_expr_free(env->pool, doomed);
 				continue;
 			} else if (res == AST_ANALYSIS_OK) {
+				all_set_past_any_consuming &= env->past_any_consuming;
 				any_sat = 1;
 			} else {
 				return res;
@@ -378,6 +380,8 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 			/* restore */
 			memcpy(env, &bak, sizeof(*env));
 		}
+
+		env->past_any_consuming |= all_set_past_any_consuming;
 
 		/* An ALT group is only unstaisfiable if they ALL are. */
 		if (!any_sat) {
