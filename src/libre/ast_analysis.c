@@ -381,6 +381,15 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 			memcpy(env, &bak, sizeof(*env));
 		}
 
+		if (!env->past_any_consuming && all_set_past_any_consuming) {
+			fprintf(
+				stderr,
+				"[%s:%s:%d] !!!libfsm behavior differs!!!\n",
+				__func__,
+				__FILE__,
+				__LINE__);
+			exit(42);
+		}
 		env->past_any_consuming |= all_set_past_any_consuming;
 
 		/* An ALT group is only unstaisfiable if they ALL are. */
