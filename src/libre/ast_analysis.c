@@ -214,8 +214,11 @@ always_consumes_input(const struct ast_expr *n)
 	}
 }
 
+/* new_behavior: this flag indicates whether to apply the bugfix in
+ * d1c19430 or not, so we can detect when execution would lead to a
+ * different result. */
 static enum ast_analysis_res
-analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
+analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n, int new_behavior)
 {
 	enum ast_analysis_res res;
 
@@ -339,7 +342,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 				}
 			}
 
-			res = analysis_iter_anchoring(env, child);
+			res = analysis_iter_anchoring(env, child, new_behavior);
 
 			env->followed_by_consuming = bak_consuming_after;
 
@@ -363,7 +366,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 
 			memcpy(&bak, env, sizeof(*env));
 
-			res = analysis_iter_anchoring(env, n->u.alt.n[i]);
+			res = analysis_iter_anchoring(env, n->u.alt.n[i], new_behavior);
 			if (res == AST_ANALYSIS_UNSATISFIABLE) {
 				/* prune unsatisfiable branch */
 				struct ast_expr *doomed = n->u.alt.n[i];
@@ -381,16 +384,9 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 			memcpy(env, &bak, sizeof(*env));
 		}
 
-		if (!env->past_any_consuming && all_set_past_any_consuming) {
-			fprintf(
-				stderr,
-				"[%s:%s:%d] !!!libfsm behavior differs!!!\n",
-				__func__,
-				__FILE__,
-				__LINE__);
-			exit(42);
+		if (new_behavior) {
+			env->past_any_consuming |= all_set_past_any_consuming;
 		}
-		env->past_any_consuming |= all_set_past_any_consuming;
 
 		/* An ALT group is only unstaisfiable if they ALL are. */
 		if (!any_sat) {
@@ -401,7 +397,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 	}
 
 	case AST_EXPR_REPEAT:
-		res = analysis_iter_anchoring(env, n->u.repeat.e);
+		res = analysis_iter_anchoring(env, n->u.repeat.e, new_behavior);
 
 		/*
 		 * This logic corresponds to the equivalent case for tombstone nodes
@@ -434,19 +430,19 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 		break;
 
 	case AST_EXPR_GROUP:
-		res = analysis_iter_anchoring(env, n->u.group.e);
+		res = analysis_iter_anchoring(env, n->u.group.e, new_behavior);
 		if (res != AST_ANALYSIS_OK) {
 			return res;
 		}
 		break;
 
 	case AST_EXPR_SUBTRACT:
-		res = analysis_iter_anchoring(env, n->u.subtract.a);
+		res = analysis_iter_anchoring(env, n->u.subtract.a, new_behavior);
 		if (res != AST_ANALYSIS_OK) {
 			return res;
 		}
 
-		res = analysis_iter_anchoring(env, n->u.subtract.b);
+		res = analysis_iter_anchoring(env, n->u.subtract.b, new_behavior);
 		if (res != AST_ANALYSIS_OK) {
 			return res;
 		}
@@ -649,13 +645,30 @@ ast_analysis(struct ast *ast)
 	 * start anchors.
 	 */
 	{
+		enum ast_analysis_res old_res;
+		enum ast_analysis_res new_res;
+
 		struct anchoring_env env;
 		memset(&env, 0x00, sizeof(env));
 		env.pool = ast->pool;
-		res = analysis_iter_anchoring(&env, ast->expr);
+		old_res = analysis_iter_anchoring(&env, ast->expr, 0);
+
+		memset(&env, 0x00, sizeof(env));
+		env.pool = ast->pool;
+		new_res = analysis_iter_anchoring(&env, ast->expr, 1);
+
+		if (old_res != new_res) {
+			fprintf(
+				stderr,
+				"[%s:%s:%d] !!!libfsm behavior differs!!!\n",
+				__func__,
+				__FILE__,
+				__LINE__);
+			exit(42);
+		}
+		res = new_res;
 		if (res != AST_ANALYSIS_OK) { return res; }
 	}
 
 	return res;
 }
-
