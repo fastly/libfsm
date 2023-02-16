@@ -25,5 +25,10 @@ if [ ! -d "${SEEDS}" ]; then
    mkdir -p "${SEEDS}"
 fi
 
-echo "\n==== ${FUZZER}"
-${FUZZER} -jobs=${WORKERS} -workers=${WORKERS} -max_total_time=${SECONDS} ${SEEDS}
+if [ -z "${1}" ]; then
+    echo "\n==== ${FUZZER}"
+    ${FUZZER} -jobs=${WORKERS} -workers=${WORKERS} -max_total_time=${SECONDS} ${SEEDS}
+else
+    xxd "${1}"
+    ${FUZZER} "${1}"
+fi
