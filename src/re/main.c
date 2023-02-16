@@ -1120,7 +1120,7 @@ main(int argc, char *argv[])
 					if (vm != NULL) {
 						e = fsm_vm_match_file(vm, f);
 					} else {
-						e = fsm_exec(fsm, fsm_fgetc, f, &state, NULL);
+						e = fsm_exec(fsm, fsm_fgetc, f, &state);
 					}
 
 					fclose(f);
@@ -1132,7 +1132,7 @@ main(int argc, char *argv[])
 					if (vm != NULL) {
 						e = fsm_vm_match_buffer(vm, s, strlen(s));
 					} else {
-						e = fsm_exec(fsm, fsm_sgetc, &s, &state, NULL);
+						e = fsm_exec(fsm, fsm_sgetc, &s, &state);
 					}
 				}
 

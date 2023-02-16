@@ -14,6 +14,7 @@
 #include <fsm/fsm.h>
 
 #include <adt/alloc.h>
+#include <adt/hash.h>
 #include <adt/stateset.h>
 
 #include "common/check.h"
@@ -193,17 +194,6 @@ dump_tables(FILE *f, const struct interned_state_set_pool *pool)
 	}
 	fprintf(f, "\n");
 #endif
-}
-
-/* This will be moved into include/adt/hash.h later. */
-/* 64-bit approximation of the golden ratio. */
-#define FSM_PHI_64 0x9e3779b97f4a7c15UL
-
-SUPPRESS_EXPECTED_UNSIGNED_INTEGER_OVERFLOW()
-static __inline__ uint64_t
-fsm_hash_id(unsigned id)
-{
-	return FSM_PHI_64 * (id + 1);
 }
 
 SUPPRESS_EXPECTED_UNSIGNED_INTEGER_OVERFLOW()

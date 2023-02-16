@@ -40,6 +40,11 @@ CFLAGS.${src} += -Wno-tautological-constant-out-of-range-compare
 .endfor
 .endif
 
+.for src in ${SRC:Msrc/adt/siphash.c} ${SRC:Msrc/adt/edgeset.c} ${SRC:Msrc/adt/idmap.c} ${SRC:Msrc/adt/ipriq.c} ${SRC:Msrc/adt/internedstateset.c}
+CFLAGS.${src} += -std=c99 # XXX: for internal.h
+DFLAGS.${src} += -std=c99 # XXX: for internal.h
+.endfor
+
 # not all concrete hashset interfaces use all static functions from hashset.inc
 .if ${CC:T:Mgcc*} || ${CC:T:Mclang*}
 .for src in ${SRC:Msrc/adt/mappinghashset.c} ${SRC:Msrc/adt/statehashset.c}

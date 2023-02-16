@@ -17,6 +17,8 @@
 #include <adt/edgeset.h>
 
 #include "internal.h"
+#include "capture.h"
+#include "endids.h"
 
 int
 fsm_addstate(struct fsm *fsm, fsm_state_t *state)
@@ -266,6 +268,18 @@ fsm_compact_states(struct fsm *fsm,
 #if LOG_COMPACT > 0
 			fprintf(stderr, "fsm_compact_states: setting new start state %d\n", new_start);
 #endif
+	}
+
+	if (!fsm_endid_compact(fsm, mapping, orig_statecount)) {
+		return 0;
+	}
+
+	if (!fsm_capture_id_compact(fsm, mapping, orig_statecount)) {
+		return 0;
+	}
+
+	if (!fsm_capture_program_association_compact(fsm, mapping, orig_statecount)) {
+		return 0;
 	}
 
 	if (fsm->statecount < orig_statecount/2) {

@@ -1,6 +1,8 @@
 .include "../../share/mk/top.mk"
 
 SRC += src/libfsm/capture.c
+SRC += src/libfsm/capture_vm.c
+SRC += src/libfsm/capture_vm_exec.c
 SRC += src/libfsm/collate.c
 SRC += src/libfsm/complete.c
 SRC += src/libfsm/consolidate.c
@@ -65,6 +67,11 @@ CFLAGS.src/libfsm/parser.c += -Wno-unused-parameter
 
 .for src in ${SRC:Msrc/libfsm/parser.c}
 ${src}: src/libfsm/lexer.h
+.endfor
+
+.for src in ${SRC:Msrc/libfsm/closure.c} ${SRC:Msrc/libfsm/determinise.c} ${SRC:Msrc/libfsm/gen.c} ${SRC:Msrc/libfsm/minimise.c} ${SRC:Msrc/libfsm/vm.c} ${SRC:Msrc/libfsm/example.c} ${SRC:Msrc/libfsm/capture.c} ${SRC:Msrc/libfsm/capture_*.c} ${SRC:Msrc/libfsm/capture_epsilons.c} ${SRC:Msrc/libfsm/exec.c} ${SRC:Msrc/libfsm/epsilons.c}
+CFLAGS.${src} += -std=c99
+DFLAGS.${src} += -std=c99
 .endfor
 
 LIB         += libfsm

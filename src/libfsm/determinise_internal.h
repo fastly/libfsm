@@ -14,6 +14,7 @@
 #include <adt/alloc.h>
 #include <adt/set.h>
 #include <adt/edgeset.h>
+#include <adt/hash.h>
 #include <adt/stateset.h>
 #include <adt/internedstateset.h>
 #include <adt/ipriq.h>
@@ -69,19 +70,6 @@ struct map {
 struct map_iter {
 	struct map *m;
 	size_t i;
-};
-
-struct reverse_mapping {
-	unsigned count;
-	unsigned ceil;
-	fsm_state_t *list;
-};
-
-struct det_copy_capture_actions_env {
-	char tag;
-	struct fsm *dst;
-	struct reverse_mapping *reverse_mappings;
-	int ok;
 };
 
 #define MAPPINGSTACK_DEF_CEIL 16
@@ -188,6 +176,10 @@ static int
 analyze_closures__grow_outputs(struct analyze_closures_env *env);
 
 static int
+remap_end_metadata(const struct fsm *src_fsm, const struct state_set *src_set,
+	struct fsm *dst_fsm, fsm_state_t dst_state);
+
+static int
 map_add(struct map *map,
 	fsm_state_t dfastate, interned_state_set_id iss, struct mapping **new_mapping);
 
@@ -205,20 +197,7 @@ static struct mapping *
 map_next(struct map_iter *iter);
 
 static int
-add_reverse_mapping(const struct fsm_alloc *alloc,
-	struct reverse_mapping *reverse_mappings,
-	fsm_state_t dfastate, fsm_state_t nfa_state);
-
-static int
-det_copy_capture_actions(struct reverse_mapping *reverse_mappings,
-	struct fsm *dst, struct fsm *src);
-
-static int
 grow_map(struct map *map);
-
-static int
-remap_capture_actions(struct map *map, struct interned_state_set_pool *issp,
-	struct fsm *dst_dfa, struct fsm *src_nfa);
 
 static struct mappingstack *
 stack_init(const struct fsm_alloc *alloc);

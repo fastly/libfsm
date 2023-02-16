@@ -15,6 +15,8 @@
 #include <adt/stateset.h>
 #include <adt/hashset.h>
 
+#define EXPENSIVE_CHECKS 0
+
 /*
  * TODO: now fsm_state_t is a numeric index, this could be a dynamically
  * allocated bitmap, instead of a set.inc's array of items.
@@ -276,7 +278,9 @@ state_set_add(struct state_set **setp, const struct fsm_alloc *alloc,
 		set->i = 1;
 	}
 
+#if EXPENSIVE_CHECKS
 	assert(state_set_contains(set, state));
+#endif
 
 	return 1;
 }
@@ -478,7 +482,9 @@ state_set_remove(struct state_set **setp, fsm_state_t state)
 		set->i--;
 	}
 
+#if EXPENSIVE_CHECKS
 	assert(!state_set_contains(set, state));
+#endif
 }
 
 int
@@ -659,7 +665,7 @@ state_set_replace(struct state_set **setp, fsm_state_t old, fsm_state_t new)
 	}
 }
 
-unsigned long
+uint64_t
 state_set_hash(const struct state_set *set)
 {
 	if (set == NULL) {

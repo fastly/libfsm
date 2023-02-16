@@ -36,7 +36,8 @@ enum re_flags {
 	RE_ZONE    = 1 << 5,
 	RE_ANCHORED = 1 << 6,
 	RE_EXTENDED = 1 << 7,  /* PCRE extended mode */
-	RE_END_NL  = 1 << 8, /* end anchor matches '\n' */
+	RE_NOCAPTURE = 1 << 8, /* disable captures */
+	RE_END_NL  = 1 << 9, /* end anchor matches '\n' */
 	RE_FLAGS_NONE = 0
 };
 
@@ -64,6 +65,8 @@ enum re_errno {
 	RE_EERRNO       =  1 | RE_MISC,
 	RE_EBADDIALECT  =  2 | RE_MISC,
 	RE_EBADGROUP    =  3 | RE_MISC,
+	RE_EUNSUPCAPTUR =  4 | RE_MISC,
+	RE_EUNSUPPPCRE  =  5 | RE_MISC,
 
 	RE_ENEGRANGE    =  0 | RE_MARK | RE_GROUP,
 	RE_ENEGCOUNT    =  1 | RE_MARK | RE_GROUP,
