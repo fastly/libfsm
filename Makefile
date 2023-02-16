@@ -86,6 +86,7 @@ SUBDIR += src/lx
 SUBDIR += src
 SUBDIR += tests/capture
 SUBDIR += tests/complement
+SUBDIR += tests/idmap
 SUBDIR += tests/intersect
 SUBDIR += tests/ir
 SUBDIR += tests/eclosure

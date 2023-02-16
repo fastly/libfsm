@@ -3,6 +3,7 @@
 SRC += src/adt/alloc.c
 SRC += src/adt/bitmap.c
 SRC += src/adt/dlist.c
+SRC += src/adt/idmap.c
 SRC += src/adt/internedstateset.c
 SRC += src/adt/ipriq.c
 SRC += src/adt/priq.c
