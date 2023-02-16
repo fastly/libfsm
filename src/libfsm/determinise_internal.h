@@ -17,6 +17,7 @@
 #include <adt/stateset.h>
 #include <adt/internedstateset.h>
 #include <adt/ipriq.h>
+#include <adt/u64bitset.h>
 
 #include "internal.h"
 #include "capture.h"
@@ -37,6 +38,9 @@
 /* Starting number of buckets for the map's
  * hash table. Must be a power of 2. */
 #define DEF_MAP_BUCKET_CEIL 4
+
+/* Starting array size for the cleanup vector. */
+#define DEF_CVECT_CEIL 4
 
 /*
  * This maps a DFA state onto its associated NFA symbol closure, such that an
@@ -132,6 +136,12 @@ struct analyze_closures_env {
 		uint64_t labels[256/64];
 		interned_state_set_id iss;
 	} *outputs;
+
+	struct clearing_vector {
+		size_t ceil;
+		size_t used;
+		fsm_state_t *ids;
+	} cvect;
 
 	size_t dst_ceil;
 	fsm_state_t *dst;

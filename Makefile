@@ -1,13 +1,21 @@
-.MAKEFLAGS: -r -m share/mk
+.MAKEFLAGS: -r -m $(.CURDIR)/share/mk
 .MAKE.JOB.PREFIX=
+
+.if defined(unix)
+BUILD_IMPOSSIBLE="attempting to use sys.mk"
+.endif
+.if $(.OBJDIR) != $(.CURDIR)
+BUILD_IMPOSSIBLE="attempting to use .OBJDIR other than .CURDIR"
+.endif
 
 # targets
 all::  mkdir .WAIT dep .WAIT lib prog
+doc::  mkdir
 dep::
 gen::
 test:: all
-fuzz:: all
-install:: all
+theft:: all
+install:: all doc
 uninstall::
 clean::
 
@@ -18,11 +26,43 @@ RE     ?= re
 BUILD  ?= build
 PREFIX ?= /usr/local
 
-.if make(fuzz) || make(${BUILD}/theft/theft)
+# ${unix} is an arbitrary variable set by sys.mk
+.if defined(unix)
+.BEGIN::
+	@echo "We don't use sys.mk; run ${MAKE} with -r" >&2
+	@false
+.endif
+
+.if $(.OBJDIR) != $(.CURDIR)
+.BEGIN::
+	@echo "We cannot handle .OBJDIR other than .CURDIR" >&2
+.if exists(${.OBJDIR})
+	@echo "You may want to delete $(.OBJDIR)" >&2
+.endif
+	@false
+.endif
+
+.if make(theft) || make(${BUILD}/theft/theft)
 PKG += libtheft
 .endif
 
 # layout
+.if !defined(NODOC)
+SUBDIR += man/fsm.1
+SUBDIR += man/re.1
+SUBDIR += man/lx.1
+SUBDIR += man/fsm_print.3
+SUBDIR += man/libfsm.3
+SUBDIR += man/fsm.5
+SUBDIR += man/lx.5
+SUBDIR += man/fsm_lang.5fsm
+SUBDIR += man/glob.5re
+SUBDIR += man/like.5re
+SUBDIR += man/literal.5re
+SUBDIR += man/native.5re
+SUBDIR += man/re_dialect.5re
+SUBDIR += man/sql.5re
+.endif
 SUBDIR += include/fsm
 SUBDIR += include/re
 SUBDIR += include
@@ -77,13 +117,19 @@ SUBDIR += tests/queue
 SUBDIR += tests/aho_corasick
 SUBDIR += tests/retest
 SUBDIR += tests
-.if make(fuzz) || make(${BUILD}/theft/theft)
+.if make(theft) || make(${BUILD}/theft/theft)
 SUBDIR += theft
+.endif
+.if make(fuzz) || make(${BUILD}/fuzzer/fuzzer)
+SUBDIR += fuzz
 .endif
 SUBDIR += pc
 
 INCDIR += include
 
+# if the build is impossible for a bmake-specific reason,
+# then these includes may cause an error before we can print a message
+.if !defined(BUILD_IMPOSSIBLE)
 .include <subdir.mk>
 .include <pc.mk>
 .include <sid.mk>
@@ -95,15 +141,21 @@ INCDIR += include
 .include <so.mk>
 .include <part.mk>
 .include <prog.mk>
+.include <man.mk>
 .include <mkdir.mk>
+.endif
 
 # these are internal tools for development; we don't install them to $PREFIX
 STAGE_BUILD := ${STAGE_BUILD:Nbin/retest}
 STAGE_BUILD := ${STAGE_BUILD:Nbin/reperf}
 STAGE_BUILD := ${STAGE_BUILD:Nbin/cvtpcre}
 
+# if the build is impossible for a bmake-specific reason,
+# then these includes may cause an error before we can print a message
+.if !defined(BUILD_IMPOSSIBLE)
 .include <install.mk>
 .include <clean.mk>
+.endif
 
 .if make(test)
 .END::

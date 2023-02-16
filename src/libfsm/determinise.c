@@ -11,7 +11,7 @@ dump_labels(FILE *f, const uint64_t labels[4])
 {
 	size_t i;
 	for (i = 0; i < 256; i++) {
-		if (labels[i/64] & ((uint64_t)1 << (i&63))) {
+		if (u64bitset_get(labels, i)) {
 			fprintf(f, "%c", (char)(isprint(i) ? i : '.'));
 		}
 	}
@@ -58,7 +58,6 @@ fsm_determinise(struct fsm *nfa)
 	{
 		fsm_state_t start;
 		interned_state_set_id start_set;
-		interned_state_set_id empty = interned_state_set_empty(issp);
 
 		/*
 		 * The starting condition is the epsilon closure of a set of states
@@ -82,7 +81,7 @@ fsm_determinise(struct fsm *nfa)
 #if LOG_DETERMINISE_CAPTURES
 		fprintf(stderr, "#### Adding mapping for start state %u -> 0\n", start);
 #endif
-		if (!interned_state_set_add(issp, &empty, start, &start_set)) {
+		if (!interned_state_set_intern_set(issp, 1, &start, &start_set)) {
 			goto cleanup;
 		}
 
@@ -131,18 +130,9 @@ fsm_determinise(struct fsm *nfa)
 #if LOG_DETERMINISE_CLOSURES
 			fprintf(stderr, "fsm_determinise: cur (dfa %zu) label [", curr->dfastate);
 			dump_labels(stderr, output->labels);
-			fprintf(stderr, "] -> iss:%p: ", output->iss);
-			{
-				struct state_iter it;
-				fsm_state_t s;
-				struct state_set *ss = interned_state_set_retain(output->iss);
-
-				for (state_set_reset(ss, &it); state_set_next(&it, &s); ) {
-					fprintf(stderr, " %u", s);
-				}
-				fprintf(stderr, "\n");
-				interned_state_set_release(output->iss);
-			}
+			fprintf(stderr, "] -> iss:%ld: ", output->iss);
+			interned_state_set_dump(stderr, issp, output->iss);
+			fprintf(stderr, "\n");
 #endif
 
 			/*
@@ -201,14 +191,13 @@ fsm_determinise(struct fsm *nfa)
 			for (m = map_first(&map, &it); m != NULL; m = map_next(&it)) {
 				struct state_iter si;
 				fsm_state_t state;
-				struct state_set *ss = interned_state_set_retain(m->iss);
+				struct state_set *ss = interned_state_set_get_state_set(ac_env.issp, iss_id);
 				fprintf(stderr, "%zu:", m->dfastate);
 
 				for (state_set_reset(ss, &si); state_set_next(&si, &state); ) {
 					fprintf(stderr, " %u", state);
 				}
 				fprintf(stderr, "\n");
-				interned_state_set_release(m->iss);
 			}
 			fprintf(stderr, "#### fsm_determinise: end of mapping\n");
 		}
@@ -237,10 +226,8 @@ fsm_determinise(struct fsm *nfa)
 			 * The current DFA state is an end state if any of its associated NFA
 			 * states are end states.
 			 */
-
-			ss = interned_state_set_retain(issp, iss_id);
+			ss = interned_state_set_get_state_set(ac_env.issp, iss_id);
 			if (!state_set_has(nfa, ss, fsm_isend)) {
-				interned_state_set_release(issp, &iss_id);
 				continue;
 			}
 
@@ -256,7 +243,6 @@ fsm_determinise(struct fsm *nfa)
 			if (!fsm_endid_carry(nfa, ss, dfa, m->dfastate)) {
 				goto cleanup;
 			}
-			interned_state_set_release(issp, &iss_id);
 		}
 
 		if (!remap_capture_actions(&map, issp, dfa, nfa)) {
@@ -284,6 +270,12 @@ cleanup:
 	}
 	if (ac_env.dst != NULL) {
 		f_free(ac_env.alloc, ac_env.dst);
+	}
+	if (ac_env.pq != NULL) {
+		ipriq_free(ac_env.pq);
+	}
+	if (ac_env.cvect.ids != NULL) {
+		f_free(ac_env.alloc, ac_env.cvect.ids);
 	}
 
 	return res;
@@ -650,7 +642,7 @@ remap_capture_actions(struct map *map, struct interned_state_set_pool *issp,
 		struct state_set *ss;
 		interned_state_set_id iss_id = m->iss;
 		assert(m->dfastate < dst_dfa->statecount);
-		ss = interned_state_set_retain(issp, iss_id);
+		ss = interned_state_set_get_state_set(issp, iss_id);
 
 		for (state_set_reset(ss, &si); state_set_next(&si, &state); ) {
 			if (!add_reverse_mapping(dst_dfa->opt->alloc,
@@ -659,7 +651,6 @@ remap_capture_actions(struct map *map, struct interned_state_set_pool *issp,
 				goto cleanup;
 			}
 		}
-		interned_state_set_release(issp, &iss_id);
 	}
 
 #if LOG_DETERMINISE_CAPTURES
@@ -769,30 +760,6 @@ clear_group_labels(struct ac_group *g, const uint64_t *b)
 	}
 }
 
-#define TRACK_TIMES 0
-
-#if TRACK_TIMES
-#include <sys/time.h>
-#define INIT_TIMERS() struct timeval pre, post
-#define TIME(T) if (gettimeofday(T, NULL) == -1) { assert(!"gettimeofday"); }
-#define DIFF_MSEC(LABEL, PRE, POST, ACCUM)				\
-	do {								\
-		const size_t diff = 1000000*(POST.tv_sec - PRE.tv_sec)	\
-		    + (POST.tv_usec - PRE.tv_usec);			\
-		if (diff > 100) {					\
-			fprintf(stderr, "%s: %zu%s\n", LABEL, diff,	\
-			    diff >= 100 ? " #### OVER 100" : "");	\
-		}							\
-		if (ACCUM != NULL) {					\
-			*ACCUM += diff;					\
-		}							\
-	} while(0)
-#else
-#define INIT_TIMERS()
-#define TIME(T)
-#define DIFF_MSEC(A, B, C, D)
-#endif
-
 static int
 analyze_closures_for_iss(struct analyze_closures_env *env,
     interned_state_set_id cur_iss)
@@ -803,7 +770,7 @@ analyze_closures_for_iss(struct analyze_closures_env *env,
 	 * below needs to overwrite the reference. */
 	interned_state_set_id iss_id = cur_iss;
 
-	struct state_set *ss = interned_state_set_retain(env->issp, iss_id);
+	struct state_set *ss = interned_state_set_get_state_set(env->issp, iss_id);
 	const size_t set_count = state_set_count(ss);
 
 	INIT_TIMERS();
@@ -854,12 +821,6 @@ analyze_closures_for_iss(struct analyze_closures_env *env,
 	res = 1;
 
 cleanup:
-	interned_state_set_release(env->issp, &iss_id);
-	if (env->pq != NULL) {
-		ipriq_free(env->pq);
-		env->pq = NULL;
-	}
-
 	return res;
 
 }
@@ -892,11 +853,15 @@ analyze_closures__init_iterators(struct analyze_closures_env *env,
 	fsm_state_t s;
 	size_t i_i;
 
-	assert(env->pq == NULL);
-	env->pq = ipriq_new(env->alloc,
-	    cmp_iterator_cb, (void *)env);
 	if (env->pq == NULL) {
-		return 0;
+		env->pq = ipriq_new(env->alloc,
+		    cmp_iterator_cb, (void *)env);
+		if (env->pq == NULL) {
+			return 0;
+		}
+	} else {
+		/* reuse, to avoid allocating in inner loop */
+		assert(ipriq_empty(env->pq));
 	}
 
 #if LOG_AC
@@ -1006,12 +971,6 @@ analyze_closures__collect(struct analyze_closures_env *env)
 		size_t next_i;
 		steps++;
 
-		if (env->group_count + 1 == env->group_ceil) {
-			if (!analyze_closures__grow_groups(env)) {
-				return AC_COLLECT_ERROR;
-			}
-		}
-
 		if (!ipriq_pop(env->pq, &next_i)) {
 			assert(!"unreachable: non-empty, but pop failed");
 			return AC_COLLECT_ERROR;
@@ -1025,6 +984,33 @@ analyze_closures__collect(struct analyze_closures_env *env)
 		struct ac_iter *iter = &env->iters[next_i];
 		assert(iter->info.to != AC_NO_STATE);
 
+		/* If we are about to put the current iterator into the
+		 * priority queue only to pop it right back out again,
+		 * note what the next state is on the next iterator in
+		 * the queue and resume the current iterator as long as
+		 * we can. This saves a lot of time spent on pointless
+		 * queue bookkeeping. */
+		size_t next_next_i = 0;
+		fsm_state_t resume_current_limit = AC_NO_STATE;
+		if (ipriq_peek(env->pq, &next_next_i)) {
+			assert(next_next_i < env->iter_count);
+			struct ac_iter *next_iter = &env->iters[next_next_i];
+			assert(next_iter->info.to != AC_NO_STATE);
+			if (next_iter->info.to > iter->info.to) {
+				resume_current_limit = next_iter->info.to;
+			}
+		}
+
+advance_current_iterator:;
+
+		if (env->group_count + 1 == env->group_ceil) {
+			if (!analyze_closures__grow_groups(env)) {
+				return AC_COLLECT_ERROR;
+			}
+		}
+
+		assert(env->group_count < env->group_ceil);
+
 		struct ac_group *g = &env->groups[env->group_count];
 
 		if (g->to == AC_NO_STATE) { /* init new group */
@@ -1036,6 +1022,14 @@ analyze_closures__collect(struct analyze_closures_env *env)
 		} else {	/* switch to next group */
 			assert(iter->info.to > g->to);
 			env->group_count++;
+
+			if (env->group_count + 1 == env->group_ceil) {
+				if (!analyze_closures__grow_groups(env)) {
+					return AC_COLLECT_ERROR;
+				}
+			}
+			assert(env->group_count < env->group_ceil);
+
 			struct ac_group *ng = &env->groups[env->group_count];
 			memset(ng, 0x00, sizeof(*ng));
 			ng->to = iter->info.to;
@@ -1047,6 +1041,10 @@ analyze_closures__collect(struct analyze_closures_env *env)
 			fprintf(stderr, "ac_collect: iter %zu -- to %d\n",
 			    next_i, iter->info.to);
 #endif
+			if (resume_current_limit != AC_NO_STATE
+			    && iter->info.to < resume_current_limit) {
+				goto advance_current_iterator;
+			}
 			if (!ipriq_add(env->pq, next_i)) {
 				return AC_COLLECT_ERROR;
 			}
@@ -1060,6 +1058,23 @@ analyze_closures__collect(struct analyze_closures_env *env)
 	env->group_count++;	/* commit current group */
 
 	return AC_COLLECT_DONE;
+}
+
+static int
+grow_clearing_vector(struct analyze_closures_env *env)
+{
+	const size_t nceil = (env->cvect.ceil == 0
+	    ? DEF_CVECT_CEIL
+	    : 2*env->cvect.ceil);
+	fsm_state_t *nids = f_realloc(env->alloc,
+	    env->cvect.ids, nceil * sizeof(nids[0]));
+	if (nids == NULL) {
+		return 0;
+	}
+
+	env->cvect.ceil = nceil;
+	env->cvect.ids = nids;
+	return 1;
 }
 
 static int
@@ -1161,6 +1176,12 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 		env->dst[dst_count] = bg->to;
 		dst_count++;
 
+		if (env->cvect.ceil == 0) {
+			if (!grow_clearing_vector(env)) { return 0; }
+		}
+		env->cvect.ids[0] = base_i;
+		env->cvect.used = 1;
+
 		for (o_i = base_i + 1; o_i < env->group_count; o_i++) {
 			const struct ac_group *og = &env->groups[o_i];
 			if (og->words_used == 0) {
@@ -1184,6 +1205,12 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 
 				env->dst[dst_count] = og->to;
 				dst_count++;
+
+				if (env->cvect.used == env->cvect.ceil) {
+					if (!grow_clearing_vector(env)) { return 0; }
+				}
+				env->cvect.ids[env->cvect.used] = o_i;
+				env->cvect.used++;
 			}
 		}
 
@@ -1194,36 +1221,11 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 		assert(labels[0] || labels[1]
 		    || labels[2] || labels[3]);
 
-		/* Since the groups are stored in order we don't need to
-		 * clear the bits from all of them -- both are sorting
-		 * by ascending .to ID, so sweep over both and clear the
-		 * labels on groups with IDs in common. */
-		{
-			size_t d_i = 0;	     /* dst index */
-			size_t g_i = base_i; /* group index */
-			while (d_i < dst_count) {
-				struct ac_group *g = &env->groups[g_i];
-				const fsm_state_t g_to = g->to;
-				const fsm_state_t dst = env->dst[d_i];
-
-#if LOG_AC
-				fprintf(stderr, "ac_analyze: clearing loop: d_i %zu/%zu, g_i %zu/%zu\n",
-				    d_i, dst_count, g_i, env->group_count);
-#endif
-				/* advance one or both indices, clearing
-				 * labels when appropriate */
-				if (g_to < dst) {
-					g_i++;
-					assert(g_i < env->group_count);
-				} else if (g_to > dst) {
-					d_i++;
-				} else {
-					assert(g_to == dst);
-					clear_group_labels(g, labels);
-					g_i++;
-					d_i++;
-				}
-			}
+		for (size_t c_i = 0; c_i < env->cvect.used; c_i++) {
+			const fsm_state_t g_id = env->cvect.ids[c_i];
+			assert(g_id < env->group_count);
+			struct ac_group *g = &env->groups[g_id];
+			clear_group_labels(g, labels);
 		}
 
 		if (LOG_AC) {
@@ -1238,19 +1240,12 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 		}
 
 		{		/* build the state set and add to the output */
-			interned_state_set_id iss = interned_state_set_empty(env->issp);
-			size_t d_i;
-			for (d_i = 0; d_i < dst_count; d_i++) {
-				interned_state_set_id updated;
-#if LOG_AC
-				fprintf(stderr, "ac_analyze: adding state %d to interned_state_set\n", env->dst[d_i]);
+#if LOG_AC > 1
+			fprintf(stderr, "ac_analyze: building interned_state_set with %zu states:", dst_count);
 #endif
-
-				if (!interned_state_set_add(env->issp,
-					&iss, env->dst[d_i], &updated)) {
-					return 0;
-				}
-				iss = updated;
+			interned_state_set_id iss;
+			if (!interned_state_set_intern_set(env->issp, dst_count, env->dst, &iss)) {
+				return 0;
 			}
 
 			if (!analyze_closures__save_output(env, labels, iss)) {
