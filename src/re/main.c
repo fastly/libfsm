@@ -18,11 +18,13 @@
 
 #include <fsm/fsm.h>
 #include <fsm/bool.h>
+#include <fsm/capture.h>
 #include <fsm/pred.h>
 #include <fsm/print.h>
 #include <fsm/options.h>
 #include <fsm/parser.h>
 #include <fsm/vm.h>
+#include <fsm/walk.h>
 
 #include <re/re.h>
 
@@ -43,6 +45,15 @@
  * for specifying flags: /abc/g
  * TODO: flags; -r for RE_REVERSE, etc
  */
+
+static struct fsm *
+compile_regex_list_from_file(enum re_dialect dialect, FILE *f,
+    const struct fsm_options *opt, const enum re_flags flags,
+    struct re_err *err);
+
+static int
+exec_with_captures(struct fsm *fsm,
+	int (*fsm_getc)(void *opaque), void *opaque, fsm_state_t *end);
 
 struct match {
 	fsm_end_id_t i;
@@ -604,6 +615,10 @@ parse_flags(const char *arg, enum re_flags *flags)
 			*flags = *flags | RE_EXTENDED;
 			break;
 
+		case 'C':
+			*flags = *flags | RE_NOCAPTURE;
+			break;
+
 		/* others? */
 
 		default:
@@ -612,6 +627,27 @@ parse_flags(const char *arg, enum re_flags *flags)
 			exit(EXIT_FAILURE);
 		}
 	}
+}
+
+static enum fsm_generate_matches_cb_res
+gen_cb(const struct fsm *fsm,
+    size_t depth, size_t match_count, size_t steps,
+    const char *input, size_t input_length,
+    fsm_state_t end_state, void *opaque)
+{
+	(void)fsm;
+	if (1) {
+		printf("depth[%zu], steps[%zu], matches[%zu]: \"%s\" length:[%zu]\n",
+		    depth, steps, match_count, input, input_length);
+	}
+
+	if (input_length > 0 && input[input_length - 1] == '\0') {
+		return FSM_GENERATE_MATCHES_CB_RES_PRUNE;
+	}
+
+	(void)end_state;
+	(void)opaque;
+	return FSM_GENERATE_MATCHES_CB_RES_CONTINUE;
 }
 
 int
@@ -625,15 +661,20 @@ main(int argc, char *argv[])
 	enum re_dialect dialect;
 	struct fsm *fsm;
 	enum re_flags flags;
-	int xfiles, yfiles;
+	int xfiles, yfiles, ymultifiles;
 	int fsmfiles;
 	int example;
 	int keep_nfa;
 	int patterns;
 	int ambig;
 	int makevm;
+	int resolve_captures;
+	int generate_matches;
+	size_t gen_max_length;
 
 	struct fsm_dfavm *vm;
+
+	INIT_TIMERS();
 
 	atexit(do_fsm_cleanup);
 
@@ -648,25 +689,30 @@ main(int argc, char *argv[])
 	fsmfiles  = 0;
 	xfiles    = 0;
 	yfiles    = 0;
+	ymultifiles = 0;
 	example   = 0;
 	keep_nfa  = 0;
 	patterns  = 0;
 	ambig     = 0;
 	makevm    = 0;
+	resolve_captures = 0;
 	print_fsm = NULL;
 	print_ast = NULL;
 	query     = NULL;
 	join      = fsm_union;
 	dialect   = RE_NATIVE;
 	vm        = NULL;
+	generate_matches = 0;
 
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:F:" "upMmnfxyz"), c != -1) {
+		while (c = getopt(argc, argv, "h" "aCcgG:wXe:k:" "bi" "sq:r:l:F:" "upMmnfxyYzR"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 0;          break;
+			case 'C': opt.comments		= 0;          break;
 			case 'c': opt.consolidate_edges = 0;          break;
+			case 'g': opt.group_edges	= 1;          break;
 			case 'w': opt.fragment          = 1;          break;
 			case 'X': opt.always_hex        = 1;          break;
 			case 'e': opt.prefix            = optarg;     break;
@@ -695,10 +741,14 @@ main(int argc, char *argv[])
 			case 'f': fsmfiles = 1; break;
 			case 'x': xfiles   = 1; break;
 			case 'y': yfiles   = 1; break;
+			case 'Y': ymultifiles = 1; break;
 			case 'm': example  = 1; break;
 			case 'n': keep_nfa = 1; break;
 			case 'z': patterns = 1; break;
 			case 'M': makevm   = 1; break;
+			/* FIXME: is there a better choice than 'R' here? */
+			case 'R': resolve_captures = 1; break;
+			case 'G': generate_matches = 1; gen_max_length = atoi(optarg); break;
 
 			case 'h':
 				usage();
@@ -758,7 +808,7 @@ main(int argc, char *argv[])
 		struct ast *ast;
 		struct re_err err;
 
-		if (argc != 1) {
+		if (argc != 1 || ymultifiles) {
 			fprintf(stderr, "single regexp only for this output format\n");
 			return EXIT_FAILURE;
 		}
@@ -849,7 +899,10 @@ main(int argc, char *argv[])
 				f = xopen(argv[i]);
 
 				if (!fsmfiles) {
+					TIME(&pre);
 					new = re_comp(dialect, fsm_fgetc, f, &opt, flags, &err);
+					TIME(&post);
+					DIFF_MSEC("re_comp", pre, post, NULL);
 				} else {
 					new = fsm_parse(f, &opt);
 					if (new == NULL) {
@@ -859,6 +912,12 @@ main(int argc, char *argv[])
 				}
 
 				fclose(f);
+			} else if (ymultifiles) {
+				FILE *f;
+
+				f = xopen(argv[i]);
+
+				new = compile_regex_list_from_file(dialect, f, &opt, flags, &err);
 			} else {
 				const char *s;
 
@@ -869,8 +928,8 @@ main(int argc, char *argv[])
 
 			if (new == NULL) {
 				re_perror(dialect, &err,
-					 yfiles ? argv[i] : NULL,
-					!yfiles ? argv[i] : NULL);
+					 (yfiles || ymultifiles) ? argv[i] : NULL,
+					!(yfiles || ymultifiles) ? argv[i] : NULL);
 
 				if (err.e == RE_EXUNSUPPORTD) {
 					return 2;
@@ -880,14 +939,27 @@ main(int argc, char *argv[])
 			}
 
 			if (!keep_nfa) {
+				TIME(&pre);
 				if (!fsm_determinise(new)) {
 					perror("fsm_determinise");
 					return EXIT_FAILURE;
 				}
+				TIME(&post);
+				DIFF_MSEC("det(main)", pre, post, NULL);
+
+				TIME(&pre);
 				if (!fsm_minimise(new)) {
 					perror("fsm_minimise");
 					return EXIT_FAILURE;
 				}
+				TIME(&post);
+				DIFF_MSEC("min(main)", pre, post, NULL);
+			}
+
+			if (generate_matches) {
+				assert(gen_max_length > 0);
+				fsm_generate_matches(new, gen_max_length, gen_cb, NULL);
+				return EXIT_SUCCESS;
 			}
 
 			{
@@ -1119,6 +1191,8 @@ main(int argc, char *argv[])
 
 					if (vm != NULL) {
 						e = fsm_vm_match_file(vm, f);
+					} else if (resolve_captures) {
+						assert(!"todo");
 					} else {
 						e = fsm_exec(fsm, fsm_fgetc, f, &state);
 					}
@@ -1131,6 +1205,8 @@ main(int argc, char *argv[])
 
 					if (vm != NULL) {
 						e = fsm_vm_match_buffer(vm, s, strlen(s));
+					} else if (resolve_captures) {
+						e = exec_with_captures(fsm, fsm_sgetc, &s, &state);
 					} else {
 						e = fsm_exec(fsm, fsm_sgetc, &s, &state);
 					}
@@ -1164,4 +1240,199 @@ main(int argc, char *argv[])
 
 		return r;
 	}
+}
+
+#define DEF_PATTERNS 1
+#define DEF_PBUF 4
+
+static struct fsm *
+compile_regex_list_from_file(enum re_dialect dialect, FILE *f,
+    const struct fsm_options *opt, const enum re_flags flags,
+    struct re_err *err)
+{
+	size_t patterns_ceil = DEF_PATTERNS;
+	size_t patterns_used = 0;
+	char **patterns = calloc(patterns_ceil, sizeof(patterns[0]));
+	assert(patterns != NULL);
+
+	size_t pbuf_ceil = DEF_PBUF;
+	size_t pbuf_used = 0;
+	char *pbuf = malloc(DEF_PBUF);
+	assert(pbuf != NULL);
+
+	INIT_TIMERS();
+
+	for (;;) {
+		if (pbuf_used == pbuf_ceil) {
+			const size_t nceil = 2*pbuf_ceil;
+			char *npbuf = realloc(pbuf, nceil * sizeof(npbuf[0]));
+			assert(npbuf != NULL);
+			pbuf = npbuf;
+			pbuf_ceil = nceil;
+		}
+
+		const int c = fgetc(f);
+		if (c == EOF || c == '\n') {
+			pbuf[pbuf_used] = '\0';
+			if (patterns_used == patterns_ceil) {
+				const size_t nceil = 2*patterns_ceil;
+				char **npatterns = realloc(patterns, nceil * sizeof(npatterns[0]));
+				assert(npatterns != NULL);
+				patterns_ceil = nceil;
+				patterns = npatterns;
+			}
+
+			patterns[patterns_used] = calloc(pbuf_used + 1, sizeof(char));
+			assert(patterns[patterns_used] != NULL);
+			memcpy(patterns[patterns_used], pbuf, pbuf_used);
+			assert(patterns[patterns_used][pbuf_used] == '\0');
+
+			pbuf_used = 0;
+			patterns_used++;
+
+			if (c == EOF) {
+				break;
+			}
+		} else {
+			pbuf[pbuf_used] = (char)c;
+			pbuf_used++;
+		}
+	}
+
+	size_t ignore = 0;
+	if (patterns_used > 1 && strlen(patterns[patterns_used - 1]) == 0) {
+		ignore = 1;	/* ignore empty pattern from final trailing newline */
+		free(patterns[patterns_used - 1]);
+		patterns[patterns_used - 1] = NULL;
+	}
+	const size_t count = patterns_used - ignore;
+
+	for (size_t i = 0; i < count; i++) {
+		fprintf(stderr, "pattern[%zu]: \"%s\"\n", i, patterns[i]);
+	}
+
+	struct fsm_combined_base_pair *bases = NULL;
+	struct fsm *combined_fsm = NULL;
+
+	struct fsm **fsms = calloc(count, sizeof(fsms[0]));
+	assert(fsms != NULL);
+
+	for (size_t i = 0; i < count; i++) {
+		struct fsm *fsm = re_comp(dialect, fsm_sgetc, &patterns[i], opt, flags, err);
+		assert(fsm != NULL);
+
+		char label_buf[100];
+		snprintf(label_buf, 100, "single_determisise_%zu", i);
+
+		TIME(&pre);
+		if (!fsm_determinise(fsm)) {
+			perror("fsm_determinise");
+			goto cleanup;
+		}
+		TIME(&post);
+		DIFF_MSEC(label_buf, pre, post, NULL);
+
+		snprintf(label_buf, 100, "single_minimise_%zu", i);
+		TIME(&pre);
+		if (!fsm_minimise(fsm)) {
+			perror("fsm_minimise");
+			goto cleanup;
+		}
+		TIME(&post);
+		DIFF_MSEC(label_buf, pre, post, NULL);
+
+		fsms[i] = fsm;
+	}
+
+	free(pbuf);
+	free(patterns);
+
+	/* FIXME: should return this */
+	bases = calloc(count, sizeof(bases[0]));
+	assert(bases != NULL);
+
+	TIME(&pre);
+	combined_fsm = fsm_union_array(count, fsms, bases);
+	assert(combined_fsm != NULL);
+	TIME(&post);
+	DIFF_MSEC("fsm_union_array", pre, post, NULL);
+
+	free(fsms);
+
+	TIME(&pre);
+	if (!fsm_determinise(combined_fsm)) {
+		perror("fsm_determinise");
+		goto cleanup;
+	}
+	TIME(&post);
+	DIFF_MSEC("combined_determinise", pre, post, NULL);
+
+	TIME(&pre);
+	if (!fsm_minimise(combined_fsm)) {
+		perror("fsm_minimise");
+		goto cleanup;
+	}
+	TIME(&post);
+	DIFF_MSEC("combined_minimise", pre, post, NULL);
+
+	/* FIXME: will need to return bases for capture resolution */
+
+	return combined_fsm;
+
+cleanup:
+	/* TODO */
+	return NULL;
+}
+
+static int
+exec_with_captures(struct fsm *fsm,
+	int (*fsm_getc)(void *opaque), void *opaque, fsm_state_t *end)
+{
+	int c;
+	size_t ceil = 16;
+	size_t used = 0;
+	unsigned char *buf = malloc(ceil);
+	size_t i;
+	size_t capture_ceil;
+	struct fsm_capture *captures;
+	int res;
+
+	while (c = fsm_getc(opaque), c != EOF) {
+		if (used == ceil - 1) {
+			const size_t nceil = 2*ceil;
+			unsigned char *nbuf = realloc(buf, nceil);
+			if (nbuf == NULL) {
+				free(buf);
+				return -1;
+			}
+			ceil = nceil;
+			buf = nbuf;
+		}
+		buf[used] = c;
+		used++;
+	}
+	buf[used] = '\0';
+
+	capture_ceil = fsm_capture_ceiling(fsm);
+
+	captures = malloc(capture_ceil * sizeof(captures[0]));
+	if (captures == NULL) {
+		free(buf);
+		return -1;
+	}
+
+	res = fsm_exec_with_captures(fsm, buf, used,
+	    end, captures);
+	if (res == 1) {
+		for (i = 0; i < capture_ceil; i++) {
+			printf("-- %zu: %zd,%zd\n",
+			    i, captures[i].pos[0], captures[i].pos[1]);
+		}
+	} else {
+		printf("-- no match\n");
+	}
+
+	free(buf);
+	free(captures);
+	return res;
 }
