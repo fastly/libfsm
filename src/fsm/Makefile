@@ -9,6 +9,9 @@ PROG += fsm
 .for src in ${SRC:Msrc/fsm/main.c}
 CFLAGS.${src} += -I src # XXX: for internal.h
 DFLAGS.${src} += -I src # XXX: for internal.h
+
+CFLAGS.${src} += -std=c99
+DFLAGS.${src} += -std=c99
 .endfor
 
 .for lib in ${LIB:Mlibfsm}
