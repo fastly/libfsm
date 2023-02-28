@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <inttypes.h>
 
 #include <re/re.h>
 
@@ -56,6 +57,11 @@ fprintf_flags(FILE *f, enum ast_flags flags)
 	PR_FLAG(LAST,          "L");
 	PR_FLAG(UNSATISFIABLE, "X");
 	PR_FLAG(NULLABLE,      "0");
+	PR_FLAG(ANCHORED_START,"^");
+	PR_FLAG(ANCHORED_END,  "$");
+	PR_FLAG(END_NL,        "N");
+	PR_FLAG(CAN_CONSUME,   "c");
+	PR_FLAG(ALWAYS_CONSUMES, "C");
 
 #undef PR_FLAG
 
@@ -86,7 +92,7 @@ print_endpoint(FILE *f, const struct ast_endpoint *e)
 		break;
 
 	case AST_ENDPOINT_CODEPOINT:
-		fprintf(f, "U+%lX\n", (unsigned long) e->u.codepoint.u);
+		fprintf(f, "U+%" PRIX32 "\n", e->u.codepoint.u);
 		break;
 
 	default:
@@ -153,7 +159,7 @@ pp_iter(FILE *f, const struct fsm_options *opt, size_t indent, enum re_flags re_
 		break;
 
 	case AST_EXPR_CODEPOINT:
-		fprintf(f, "CODEPOINT U+%lX\n", (unsigned long) n->u.codepoint.u);
+		fprintf(f, "CODEPOINT U+%" PRIX32 "\n", n->u.codepoint.u);
 		break;
 
 	case AST_EXPR_REPEAT:

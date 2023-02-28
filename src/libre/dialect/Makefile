@@ -31,7 +31,12 @@ DFLAGS.${src} += -D LX_HEADER='"lexer.h"'
 CFLAGS.${src} += -D DIALECT='${dialect}'
 DFLAGS.${src} += -D DIALECT='${dialect}'
 
-.if ${dialect:T:Mpcre}
+# This workaround is for OpenBSD's make(1), where despite being claimed
+# to be legal in the documentation, .if ${dialect} == pcre gives a syntax error.
+# I think this might be because ${dialect} isn't evaulated because it's a loop
+# variable, so my workaround here is to force evaulation.
+tmp := ${dialect}
+.if ${tmp} == pcre
 CFLAGS.${src} += -D PCRE_DIALECT=1
 DFLAGS.${src} += -D PCRE_DIALECT=1
 .endif
@@ -40,11 +45,6 @@ DFLAGS.${src} += -D PCRE_DIALECT=1
 .for src in ${SRC:Msrc/libre/dialect/${dialect}/parser.c}
 CFLAGS.${src} += -I src # XXX: for internal.h
 DFLAGS.${src} += -I src # XXX: for internal.h
-.endfor
-
-.for src in ${SRC:Msrc/libre/dialect/${dialect}/parser.c}
-CFLAGS.${src} += -std=c99 # XXX: for ast.h
-DFLAGS.${src} += -std=c99 # XXX: for ast.h
 .endfor
 
 .for parser in ${PARSER:Msrc/libre/dialect/${dialect}/parser.sid}

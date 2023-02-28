@@ -43,14 +43,7 @@ PROPNAME.theft += union_literals
 
 .for src in ${SRC:Mtheft/*.c}
 CFLAGS.${src} += -D_POSIX_C_SOURCE=200809L
-CFLAGS.${src} += -std=c99
-.if ${CC:T:Mgcc*} || ${CC:T:Mclang*}
-.endif
-.endfor
-
-.for src in ${SRC:Mtheft/*.c}
 DFLAGS.${src} += -D_POSIX_C_SOURCE=200809L
-DFLAGS.${src} += -std=c99
 .endfor
 
 .for src in ${SRC:Mtheft/*.c}
@@ -72,11 +65,11 @@ CFLAGS.${src:Mtheft/*.c} += -Wno-unused-function
 
 LFLAGS.theft += ${LIBS.libtheft}
 
-${BUILD}/theft/theft: ${BUILD}
+${BUILD}/theft/theft: ${BUILD}/theft
 	${CC} -o $@ ${LFLAGS} ${.ALLSRC:M*.o} ${.ALLSRC:M*.a} ${LFLAGS.theft}
 
 .for name in ${PROPNAME.theft}
-fuzz:: ${BUILD}/theft/theft
+theft:: ${BUILD}/theft/theft
 	${BUILD}/theft/theft -n ${name}
 .endfor
 
