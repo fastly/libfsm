@@ -588,6 +588,10 @@ capvm_compile_iter_save_groups_in_skipped_subtree(struct capvm_compile_env *env,
 	struct capvm_program *p, const struct ast_expr *expr);
 
 static bool
+compile_kleene_star(struct capvm_compile_env *env,
+    struct capvm_program *p, const struct ast_expr *expr);
+
+static bool
 capvm_compile_iter(struct capvm_compile_env *env,
 	struct capvm_program *p, const struct ast_expr *expr)
 {
@@ -966,47 +970,9 @@ capvm_compile_iter(struct capvm_compile_env *env,
 			const uint32_t after_expr = get_program_offset(p);
 			op_split->u.split.new = after_expr;
 		} else if (min == 0 && max == AST_COUNT_UNBOUNDED) { /* * */
-			/* l1: split l2, l3
-			 * l2: <subtree>
-			 *     jmp_once l1    OR    jmp l1
-			 * l3: <after> */
-			if (!ensure_program_capacity(env->alloc, p, 2)) {
+			if (!compile_kleene_star(env, p, expr)) {
 				return false;
 			}
-
-			const uint32_t pos_l1 = reserve_program_opcode(p);
-			const uint32_t pos_l2 = get_program_offset(p);
-
-			struct capvm_opcode *op_split = &p->ops[pos_l1];
-			op_split->t = CAPVM_OP_SPLIT;
-			op_split->u.split.cont = PENDING_OFFSET_REPEAT_OPTIONAL_CONT;
-			op_split->u.split.new = PENDING_OFFSET_REPEAT_OPTIONAL_NEW;
-
-			if (!capvm_compile_iter(env, p, e)) { return false; }
-
-			if (!ensure_program_capacity(env->alloc, p, 2)) {
-				return false;
-			}
-
-			/* It's more expensive to always emit JMP_ONCE because it
-			 * extends the path each iteration, so we could detect when
-			 * it would be safe to use a JMP instead. */
-			if (can_safely_skip_JMP_ONCE(expr)) {
-				const uint32_t pos_jmp = reserve_program_opcode(p);
-				struct capvm_opcode *op_jmp = &p->ops[pos_jmp];
-				op_jmp->t = CAPVM_OP_JMP;
-				op_jmp->u.jmp = pos_l1;
-			} else {
-				const uint32_t pos_jmp_once = reserve_program_opcode(p);
-				struct capvm_opcode *op_jmp_once = &p->ops[pos_jmp_once];
-				op_jmp_once->t = CAPVM_OP_JMP_ONCE;
-				op_jmp_once->u.jmp_once = pos_l1;
-			}
-
-			const uint32_t pos_l3 = get_program_offset(p);
-			op_split = &p->ops[pos_l1]; /* refresh pointer */
-			op_split->u.split.cont = pos_l2;
-			op_split->u.split.new = pos_l3;
 		} else if (min == 1 && max == AST_COUNT_UNBOUNDED) { /* + */
 			if (expr->u.repeat.contains_nullable_alt) {
 				if (!push_repeated_alt_backpatch_info(env, expr)) {
@@ -1071,8 +1037,11 @@ capvm_compile_iter(struct capvm_compile_env *env,
 			}
 
 			if (max == AST_COUNT_UNBOUNDED) {
-				/* FIXME: This should be treated like '+' above. */
-				assert(!"not yet implemented");
+				/* A repeat of {x,inf} should be treated like
+				 * (?:subtree){x} (?:subtree)* . */
+				if (!compile_kleene_star(env, p, expr)) {
+					return false;
+				}
 			} else {
 				/* then repeat up to the max as <expr>?
 				 *
@@ -1270,6 +1239,61 @@ capvm_compile_iter(struct capvm_compile_env *env,
 		assert(!"matchfail");
 	}
 
+	return true;
+}
+
+static bool
+compile_kleene_star(struct capvm_compile_env *env,
+    struct capvm_program *p, const struct ast_expr *expr)
+{
+	/* Note: min count may be > 0 because this is also
+	 * used for unbounded repetition with a lower count,
+	 * as in `a{3,}`, but in that case the {min}
+	 * repetitions have already been handled by the caller. */
+	assert(expr && expr->type == AST_EXPR_REPEAT &&
+	    expr->u.repeat.max == AST_COUNT_UNBOUNDED);
+
+	/* l1: split l2, l3
+	 * l2: <subtree>
+	 *     jmp_once l1    OR    jmp l1
+	 * l3: <after> */
+	if (!ensure_program_capacity(env->alloc, p, 2)) {
+		return false;
+	}
+
+	const uint32_t pos_l1 = reserve_program_opcode(p);
+	const uint32_t pos_l2 = get_program_offset(p);
+
+	struct capvm_opcode *op_split = &p->ops[pos_l1];
+	op_split->t = CAPVM_OP_SPLIT;
+	op_split->u.split.cont = PENDING_OFFSET_REPEAT_OPTIONAL_CONT;
+	op_split->u.split.new = PENDING_OFFSET_REPEAT_OPTIONAL_NEW;
+
+	if (!capvm_compile_iter(env, p, expr->u.repeat.e)) { return false; }
+
+	if (!ensure_program_capacity(env->alloc, p, 2)) {
+		return false;
+	}
+
+	/* It's more expensive to always emit JMP_ONCE because it
+	 * extends the path each iteration, so we could detect when
+	 * it would be safe to use a JMP instead. */
+	if (can_safely_skip_JMP_ONCE(expr)) {
+		const uint32_t pos_jmp = reserve_program_opcode(p);
+		struct capvm_opcode *op_jmp = &p->ops[pos_jmp];
+		op_jmp->t = CAPVM_OP_JMP;
+		op_jmp->u.jmp = pos_l1;
+	} else {
+		const uint32_t pos_jmp_once = reserve_program_opcode(p);
+		struct capvm_opcode *op_jmp_once = &p->ops[pos_jmp_once];
+		op_jmp_once->t = CAPVM_OP_JMP_ONCE;
+		op_jmp_once->u.jmp_once = pos_l1;
+	}
+
+	const uint32_t pos_l3 = get_program_offset(p);
+	op_split = &p->ops[pos_l1]; /* refresh pointer */
+	op_split->u.split.cont = pos_l2;
+	op_split->u.split.new = pos_l3;
 	return true;
 }
 
