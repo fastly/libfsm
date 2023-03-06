@@ -257,6 +257,51 @@ analysis_iter(struct ast_expr *n)
 	return AST_ANALYSIS_OK;
 }
 
+static int
+is_only_anchors(struct ast_expr *expr)
+{
+	if (can_consume_input(expr)) { return 0; }
+
+	switch (expr->type) {
+	case AST_EXPR_ANCHOR:
+		return 1;
+
+	case AST_EXPR_CONCAT:
+		if (expr->u.concat.count == 0) { return 0; }
+		for (size_t i = 0; i < expr->u.concat.count; i++) {
+			if (!is_only_anchors(expr->u.concat.n[i])
+			    && can_consume_input(expr->u.concat.n[i])) {
+				return 0;
+			}
+		}
+		return 1;
+
+	case AST_EXPR_ALT:
+		assert(expr->u.alt.count > 0);
+		for (size_t i = 0; i < expr->u.alt.count; i++) {
+			/* earlier matches will shadow later ones */
+			if (is_only_anchors(expr->u.alt.n[i])) {
+				return 1;
+			}
+		}
+		return 0;
+
+	case AST_EXPR_REPEAT:
+		if (expr->u.repeat.min == 0 && expr->u.repeat.max == 0) {
+			return 0;
+		}
+		return is_only_anchors(expr->u.repeat.e);
+
+	case AST_EXPR_GROUP:
+		return is_only_anchors(expr->u.group.e);
+
+	default:
+		break;
+	}
+
+	return 0;
+}
+
 static enum ast_analysis_res
 analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_parent,
 	int shadowed_by_previous_alt_case, struct ast_expr *repeat_plus_ancestor)
@@ -308,19 +353,24 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 
 		/* FIXME: check nesting of this construct */
 
+		LOG(3 - LOG_REPETITION_CASES,
+		    "%s: ALT node %p, repeat_plus_ancestor %p\n",
+		    __func__, (void *)n, (void *)repeat_plus_ancestor);
+
 		for (size_t i = 0; i < n->u.alt.count; i++) {
 			/* If this is an ALT inside of a repeated subtree that contains
 			 * a capture, this will need special handling. */
 			if (outermost_repeat_parent != NULL) {
+				LOG(3 - LOG_REPETITION_CASES,
+				    "%s: setting outermost_repeat_parent to %p for alt branch %zu, repeat_plus_ancestor %p\n",
+				    __func__, (void *)n, i, (void *)repeat_plus_ancestor);
 				outermost_repeat_parent = n;
 			}
-			res = analysis_iter_repetition(n->u.alt.n[i],
-			    outermost_repeat_parent,
-			    new_shadowed_by_previous_alt_case,
-			    repeat_plus_ancestor);
-			if (res != AST_ANALYSIS_OK) { return res; }
 
-			if (is_nullable(n->u.alt.n[i])) {
+			if (is_nullable(n->u.alt.n[i]) || is_only_anchors(n->u.alt.n[i])) {
+				LOG(3 - LOG_REPETITION_CASES,
+				    "%s: setting new_shadowed_by_previous_alt_case for alt branch %zu, repeat_plus_ancestor %p\n",
+				    __func__, i, (void *)repeat_plus_ancestor);
 				new_shadowed_by_previous_alt_case = 1;
 				if (repeat_plus_ancestor != NULL) {
 					n->u.alt.nullable_alt_inside_plus_repeat = 1;
@@ -333,6 +383,12 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 					return AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE;
 				}
 			}
+
+			res = analysis_iter_repetition(n->u.alt.n[i],
+			    outermost_repeat_parent,
+			    new_shadowed_by_previous_alt_case,
+			    repeat_plus_ancestor);
+			if (res != AST_ANALYSIS_OK) { return res; }
 		}
 		break;
 	}
@@ -341,16 +397,15 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 	{
 		struct ast_expr *child = n->u.repeat.e;
 
-		LOG(3 - LOG_REPETITION_CASES, "%s: min %u max %u nullable? %d, !cci %d\n",
-		    __func__, n->u.repeat.min, n->u.repeat.max,
+		LOG(3 - LOG_REPETITION_CASES, "%s: REPEAT node %p, min %u max %u nullable? %d, !cci %d\n",
+		    __func__, (void *)n, n->u.repeat.min, n->u.repeat.max,
 		    is_nullable(child), can_consume_input(child));
 
 		/* FIXME: This is not working yet because the ($) nodes aren't
 		 * flagged as NULLABLE (that breaks other things). */
 
 		if (n->u.repeat.min == 1 &&
-		    n->u.repeat.max == AST_COUNT_UNBOUNDED &&
-		    (is_nullable(child) || !can_consume_input(child))) {
+		    n->u.repeat.max == AST_COUNT_UNBOUNDED) {
 			LOG(3 - LOG_REPETITION_CASES, "%s: setting repeat_plus_ancestor to %p\n",
 			    __func__, (void *)n);
 			repeat_plus_ancestor = n;
@@ -392,6 +447,11 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 	}
 
 	case AST_EXPR_GROUP:
+		LOG(3 - LOG_REPETITION_CASES,
+		    "%s: GROUP %p, repeat_plus_ancestor %p\n",
+		    __func__, (void *)n, (void *)repeat_plus_ancestor);
+
+
 		if (outermost_repeat_parent != NULL && (is_nullable(n) || !can_consume_input(n))) {
 			int should_mark_repeated = 1;
 			/* If the outermost_repeat_parent is an ALT node and a previous ALT subtree
