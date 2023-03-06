@@ -1168,7 +1168,7 @@ const struct captest_case_single single_cases[] = {
 	        .regex = "()((()(^|$|$^|^|$|$^^|$|$^|^|$|$^^^^|^|(|)($)|)+|^^|^|(|)($)|)+|)($)()+",
 		.input = "",
 		.count = 12,
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.expected = {
 			{ .pos = {0, 0}, },
 			{ .pos = {0, 0}, },
@@ -1189,7 +1189,7 @@ const struct captest_case_single single_cases[] = {
 		.regex = "(^|())+()",
 		.input = "",
 		.count = 4,
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.expected = {
 			{ .pos = {0, 0}, },
 			{ .pos = {0, 0}, },
@@ -1200,7 +1200,7 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "(?:(^|^$)+|)+",
 		.input = "",
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.count = 2,
 		.expected = {
 			{ .pos = {0, 0}, },
@@ -1210,7 +1210,7 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "^((|)($)|)+a$",
 		.input = "a",
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.count = 4,
 		.expected = {
 			{ .pos = {0, 1}, },
@@ -1222,7 +1222,7 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "^(($)|)+a$",
 		.input = "a",
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.count = 3,
 		.expected = {
 			{ .pos = {0, 1}, },
@@ -1253,7 +1253,7 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "(((($)|)+|)a|)+",
 		.input = "",
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.count = 5,
 		.expected = {
 			{ .pos = {0, 0}, },
@@ -1298,7 +1298,9 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "^(?:($|x))+$",
 		.input = "x",
-		.match = SHOULD_SKIP, /* for now */
+
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
+
 		.count = 2,
 		.expected = {
 			{ .pos = {0, 1}, },
@@ -1308,7 +1310,7 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "^(($)|x)+$",
 		.input = "x",
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.count = 3,
 		.expected = {
 			{ .pos = {0, 1}, },
@@ -1329,7 +1331,7 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "^(?:($|x)())+$",
 		.input = "x",
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.count = 3,
 		.expected = {
 			{ .pos = {0, 1}, },
@@ -1341,7 +1343,7 @@ const struct captest_case_single single_cases[] = {
 	{
 		.regex = "()~((|)($)|%)+",
 		.input = "~%",
-		.match = SHOULD_SKIP, /* for now */
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
 		.count = 5,
 		.expected = {
 			{ .pos = {0, 2}, },
@@ -1351,6 +1353,23 @@ const struct captest_case_single single_cases[] = {
 			{ .pos = {2, 2}, },
 		},
 	},
+
+	{
+		/* (slightly) reduced version of the previous */
+		.regex = "^(()($)|x)+$",
+		.input = "x",
+		.match = SHOULD_REJECT_AS_UNSUPPORTED,
+		.count = 4,
+		.expected = {
+			{ .pos = {0, 1}, },
+			{ .pos = {1, 1}, },
+			{ .pos = {1, 1}, },
+			{ .pos = {1, 1}, },
+		},
+	},
+
+
+
 };
 
 const struct captest_case_multi multi_cases[] = {
@@ -1691,7 +1710,7 @@ int main(int argc, char **argv) {
 			break;
 		case CAPTEST_RUN_CASE_FAIL:
 			if (options.verbosity == 0) {
-				printf("-- test case %zd (\"%s\")\n", cur, t->regex);
+				printf("-- test case %zd (regex \"%s\", input \"%s\")\n", cur, t->regex, t->input);
 			}
 			fail++;
 			break;
@@ -1733,7 +1752,7 @@ int main(int argc, char **argv) {
 			break;
 		case CAPTEST_RUN_CASE_FAIL:
 			if (options.verbosity == 0) {
-				printf("-- test case %zd\n", cur);
+				printf("-- test case %zd (regex \"%s\", input \"%s\\n\")\n", cur, t->regex, t->input);
 			}
 			fail++;
 			break;

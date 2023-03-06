@@ -57,6 +57,15 @@ captest_run_case(const struct captest_case_single *testcase,
 	struct fsm *fsm = re_comp(RE_PCRE,
 		    captest_getc, &comp_input,
 		    &options, flags, &err);
+
+	if (testcase->match == SHOULD_REJECT_AS_UNSUPPORTED) {
+		if (fsm != NULL) {
+			fsm_free(fsm);
+			return CAPTEST_RUN_CASE_FAIL;
+		}
+		return CAPTEST_RUN_CASE_PASS;
+	}
+
 	assert(fsm != NULL);
 
 	if (!fsm_determinise(fsm)) {
