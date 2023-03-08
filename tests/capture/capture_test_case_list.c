@@ -1368,8 +1368,14 @@ const struct captest_case_single single_cases[] = {
 		},
 	},
 
-
-
+	{
+		.regex = "a|_$[^b]",
+		.input = "a",
+		.count = 1,
+		.expected = {
+			{ .pos = {0, 1}, },
+		},
+	},
 };
 
 const struct captest_case_multi multi_cases[] = {

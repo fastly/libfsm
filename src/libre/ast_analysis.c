@@ -379,6 +379,8 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 					assert(repeat_plus_ancestor->u.repeat.max == AST_COUNT_UNBOUNDED);
 					repeat_plus_ancestor->u.repeat.contains_nullable_alt = 1;
 
+					set_flags(n, AST_FLAG_UNSATISFIABLE);
+
 					/* FIXME: This case is not handled properly yet. */
 					return AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE;
 				}
@@ -984,6 +986,10 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 
 			if (res != AST_ANALYSIS_OK &&
 			    res != AST_ANALYSIS_UNSATISFIABLE) { /* unsat is handled below */
+				if (res == AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE) {
+					assert(child->flags & AST_FLAG_UNSATISFIABLE);
+					set_flags(n, AST_FLAG_UNSATISFIABLE);
+				}
 				return res;
 			}
 
