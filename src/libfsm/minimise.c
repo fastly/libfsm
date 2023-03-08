@@ -264,6 +264,8 @@ build_minimised_mapping(const struct fsm *fsm,
 	/* Alloc for each state, plus the dead state. */
 	size_t alloc_size = (fsm->statecount + 1) * sizeof(env.state_ecs[0]);
 
+	INIT_TIMERS();
+
 	env.fsm = fsm;
 	env.dead_state = fsm->statecount;
 	env.iter = 0;
