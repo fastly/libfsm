@@ -15,12 +15,6 @@ SRC += src/libre/dialect/${dialect}/lexer.c
 SRC += src/libre/dialect/${dialect}/parser.c
 SRC += src/libre/dialect/${dialect}/re_dialect_${dialect}.c
 
-LEXER  += src/libre/dialect/${dialect}/lexer.lx
-
-.for lexer in ${LEXER:Msrc/libre/dialect/${dialect}/lexer.lx}
-LX_CFLAGS.${lexer} += -e lx_${dialect}_ -b dyn
-.endfor
-
 .for src in ${SRC:Msrc/libre/dialect/${dialect}/lexer.c}
 CFLAGS.${src} += -D LX_HEADER='"lexer.h"'
 DFLAGS.${src} += -D LX_HEADER='"lexer.h"'

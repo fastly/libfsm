@@ -31,10 +31,6 @@ CFLAGS.${src} += -std=c99 # XXX: for internal.h
 DFLAGS.${src} += -std=c99 # XXX: for internal.h
 .endfor
 
-LEXER  += src/fsm/lexer.lx
-
-LX_CFLAGS.src/fsm/lexer.lx += -b dyn -g fgetc
-
 PROG += fsm
 
 # SID persistent variables are unused in some productions

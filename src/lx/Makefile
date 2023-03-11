@@ -26,10 +26,6 @@ DFLAGS.${src} += -pthread
 .endif
 LFLAGS.lx += -lpthread
 
-LEXER  += src/lx/lexer.lx
-
-LX_CFLAGS.src/lx/lexer.lx += -b dyn -g fgetc
-
 PROG += lx
 
 .for src in ${SRC:Msrc/lx/parser.c}
