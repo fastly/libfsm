@@ -44,8 +44,8 @@ fsm_determinise(struct fsm *nfa)
 		}
 	}
 
-#if LOG_DETERMINISE_CAPTURES
-	fprintf(stderr, "# post_remove_epsilons\n");
+#if LOG_DETERMINISE_CAPTURES || LOG_INPUT
+	fprintf(stderr, "# post_remove_epsilons, pre_determinise\n");
 	fsm_print_fsm(stderr, nfa);
 	fsm_capture_dump(stderr, "#### post_remove_epsilons", nfa);
 #endif
@@ -114,7 +114,7 @@ fsm_determinise(struct fsm *nfa)
 
 		assert(curr != NULL);
 
-		if (!analyze_closures_for_iss(&ac_env, curr->iss)) {
+		if (!analyze_closures__pairwise_grouping(&ac_env, curr->iss)) {
 			goto cleanup;
 		}
 
@@ -128,7 +128,8 @@ fsm_determinise(struct fsm *nfa)
 			interned_state_set_id iss = output->iss;
 
 #if LOG_DETERMINISE_CLOSURES
-			fprintf(stderr, "fsm_determinise: cur (dfa %zu) label [", curr->dfastate);
+			fprintf(stderr, "fsm_determinise: output %zu/%zu: cur (dfa %zu) label [",
+			    o_i, ac_env.output_count, curr->dfastate);
 			dump_labels(stderr, output->labels);
 			fprintf(stderr, "] -> iss:%ld: ", output->iss);
 			interned_state_set_dump(stderr, issp, output->iss);
@@ -169,6 +170,8 @@ fsm_determinise(struct fsm *nfa)
 			}
 		}
 
+		ac_env.output_count = 0;
+
 		/* All elements in sclosures[] are interned, so they will be freed later. */
 	} while ((curr = stack_pop(stack)));
 
@@ -190,6 +193,7 @@ fsm_determinise(struct fsm *nfa)
 			 * of the new DFA state Y, then add Y to a list for X */
 			for (m = map_first(&map, &it); m != NULL; m = map_next(&it)) {
 				struct state_iter si;
+				interned_state_set_id iss_id = m->iss;
 				fsm_state_t state;
 				struct state_set *ss = interned_state_set_get_state_set(ac_env.issp, iss_id);
 				fprintf(stderr, "%zu:", m->dfastate);
@@ -252,6 +256,10 @@ fsm_determinise(struct fsm *nfa)
 		fsm_move(nfa, dfa);
 	}
 
+#if EXPENSIVE_CHECKS
+	assert(fsm_all(nfa, fsm_isdfa));
+#endif
+
 	res = 1;
 
 cleanup:
@@ -259,23 +267,45 @@ cleanup:
 	stack_free(stack);
 	interned_state_set_pool_free(issp);
 
-	if (ac_env.iters != NULL) {
-		f_free(ac_env.alloc, ac_env.iters);
-	}
-	if (ac_env.groups != NULL) {
-		f_free(ac_env.alloc, ac_env.groups);
-	}
 	if (ac_env.outputs != NULL) {
 		f_free(ac_env.alloc, ac_env.outputs);
 	}
 	if (ac_env.dst != NULL) {
 		f_free(ac_env.alloc, ac_env.dst);
 	}
-	if (ac_env.pq != NULL) {
-		ipriq_free(ac_env.pq);
-	}
 	if (ac_env.cvect.ids != NULL) {
 		f_free(ac_env.alloc, ac_env.cvect.ids);
+	}
+	if (ac_env.groups != NULL) {
+		f_free(ac_env.alloc, ac_env.groups);
+	}
+
+	f_free(ac_env.alloc, ac_env.pbuf[0]);
+	f_free(ac_env.alloc, ac_env.pbuf[1]);
+	f_free(ac_env.alloc, ac_env.htab.buckets);
+	f_free(ac_env.alloc, ac_env.to_sets.buf);
+	f_free(ac_env.alloc, ac_env.to_set_htab.buckets);
+	f_free(ac_env.alloc, ac_env.dst_tmp.buf);
+	for (size_t i = 0; i < ac_env.results.used; i++) {
+		f_free(ac_env.alloc, ac_env.results.rs[i]);
+	}
+	f_free(ac_env.alloc, ac_env.results.rs);
+	f_free(ac_env.alloc, ac_env.results.buffer.entries);
+
+	if (LOG_ANALYSIS_STATS) {
+		const size_t count_total = ac_env.count_single + ac_env.count_pair;
+		fprintf(stderr, "%s: counts: single %zu/%zu (%g%%), pair %zu/%zu (%g%%)\n",
+		    __func__,
+		    ac_env.count_single, count_total, (100.0 * ac_env.count_single)/count_total,
+		    ac_env.count_pair, count_total, (100.0 * ac_env.count_pair)/count_total);
+
+		if (TRACK_TIMES) {
+			const size_t usec_total = ac_env.usec_single + ac_env.usec_pair;
+			fprintf(stderr, "%s: usec: single %zu/%zu (%g%%), pair %zu/%zu (%g%%)\n",
+			    __func__,
+			    ac_env.usec_single, usec_total, (100.0 * ac_env.usec_single)/usec_total,
+			    ac_env.usec_pair, usec_total, (100.0 * ac_env.usec_pair)/usec_total);
+		}
 	}
 
 	return res;
@@ -683,22 +713,6 @@ cleanup:
 	return res;
 }
 
-#if LOG_AC
-static void
-dump_egi_info(size_t i, const struct edge_group_iter_info *info) {
-	if (info->to == AC_NO_STATE) {
-		fprintf(stderr, "%zu: DONE\n", i);
-		return;
-	}
-	fprintf(stderr, "%zu: unique %d, to %d, symbols: [0x%lx, 0x%lx, 0x%lx, 0x%lx] -- ",
-	    i, info->unique, info->to,
-	    info->symbols[0], info->symbols[1],
-	    info->symbols[2], info->symbols[3]);
-	dump_labels(stderr, info->symbols);
-	fprintf(stderr, "\n");
-}
-#endif
-
 static int
 group_labels_overlap(const struct ac_group *a, const struct ac_group *b)
 {
@@ -761,176 +775,6 @@ clear_group_labels(struct ac_group *g, const uint64_t *b)
 }
 
 static int
-analyze_closures_for_iss(struct analyze_closures_env *env,
-    interned_state_set_id cur_iss)
-{
-	int res = 0;
-
-	/* Save the ID in a local variable, because release
-	 * below needs to overwrite the reference. */
-	interned_state_set_id iss_id = cur_iss;
-
-	struct state_set *ss = interned_state_set_get_state_set(env->issp, iss_id);
-	const size_t set_count = state_set_count(ss);
-
-	INIT_TIMERS();
-
-	assert(env != NULL);
-	assert(set_count > 0);
-
-	TIME(&pre);
-	if (!analyze_closures__init_iterators(env, ss, set_count)) {
-		goto cleanup;
-	}
-	TIME(&post);
-	DIFF_MSEC("init_iterators", pre, post, NULL);
-
-	env->output_count = 0;
-
-	TIME(&pre);
-	if (!analyze_closures__init_groups(env)) {
-		goto cleanup;
-	}
-	TIME(&post);
-	DIFF_MSEC("init_groups", pre, post, NULL);
-
-	TIME(&pre);
-
-	switch (analyze_closures__collect(env)) {
-	case AC_COLLECT_DONE:
-		TIME(&post);
-		DIFF_MSEC("collect", pre, post, NULL);
-
-		TIME(&pre);
-		if (!analyze_closures__analyze(env)) {
-			goto cleanup;
-		}
-		TIME(&post);
-		DIFF_MSEC("analyze", pre, post, NULL);
-		break;
-
-	case AC_COLLECT_EMPTY:
-		/* no analysis to do */
-		break;
-
-	default:
-	case AC_COLLECT_ERROR:
-		goto cleanup;
-	}
-
-	res = 1;
-
-cleanup:
-	return res;
-
-}
-
-static enum ipriq_cmp_res
-cmp_iterator_cb(size_t a, size_t b, void *opaque)
-{
-	struct analyze_closures_env *env = opaque;
-	assert(env != NULL);
-
-	assert(a < env->iter_count);
-	assert(b < env->iter_count);
-
-	const fsm_state_t to_a = env->iters[a].info.to;
-	const fsm_state_t to_b = env->iters[b].info.to;
-
-#if LOG_AC
-	fprintf(stderr, "cmp_iterator_ac: a %zu -> to_a %d, b %zu -> to_b %d\n",
-	    a, to_a, b, to_b);
-#endif
-
-	return to_a < to_b ? IPRIQ_CMP_LT : to_a > to_b ? IPRIQ_CMP_GT : IPRIQ_CMP_EQ;
-}
-
-static int
-analyze_closures__init_iterators(struct analyze_closures_env *env,
-	const struct state_set *ss, size_t set_count)
-{
-	struct state_iter it;
-	fsm_state_t s;
-	size_t i_i;
-
-	if (env->pq == NULL) {
-		env->pq = ipriq_new(env->alloc,
-		    cmp_iterator_cb, (void *)env);
-		if (env->pq == NULL) {
-			return 0;
-		}
-	} else {
-		/* reuse, to avoid allocating in inner loop */
-		assert(ipriq_empty(env->pq));
-	}
-
-#if LOG_AC
-	fprintf(stderr, "ac_init: ceil %zu, count %zu\n",
-	    env->iter_ceil, set_count);
-#endif
-
-	/* Grow backing array for iterators on demand */
-	if (env->iter_ceil < set_count) {
-		if (!analyze_closures__grow_iters(env, set_count)) {
-			return 0;
-		}
-	}
-
-	/* Init all the edge group iterators so we can step them in
-	 * parallel and merge. Each will yield edge groups in order,
-	 * sorted by .to, so we can merge them that way. */
-	i_i = 0;
-	state_set_reset(ss, &it);
-
-#if LOG_AC
-	fprintf(stderr, "ac_init: initializing iterators:");
-#endif
-
-	while (state_set_next(&it, &s)) {
-		/* The edge set group iterator can partition them into
-		 * unique (within the edge set) and non-unique label
-		 * sets, but what we really care about is labels that
-		 * are unique within the entire state set, so that
-		 * doesn't actually help us much. */
-#if LOG_AC
-		fprintf(stderr, " %d", s);
-#endif
-		edge_set_group_iter_reset(env->fsm->states[s].edges,
-		    EDGE_GROUP_ITER_ALL, &env->iters[i_i].iter);
-		i_i++;
-	}
-
-#if LOG_AC
-	fprintf(stderr, "\n");
-#endif
-	env->iter_count = set_count;
-
-	assert(env->pq != NULL);
-	assert(ipriq_empty(env->pq));
-
-	for (i_i = 0; i_i < set_count; i_i++) {
-		struct ac_iter *egi = &env->iters[i_i];
-		if (edge_set_group_iter_next(&egi->iter, &egi->info)) {
-#if LOG_AC
-			fprintf(stderr, "ac_collect: iter[%zu]: to: %d\n",
-			    i_i, egi->info.to);
-			dump_egi_info(i_i, &egi->info);
-#endif
-			if (!ipriq_add(env->pq, i_i)) {
-				return 0;
-			}
-		} else {
-#if LOG_AC
-			fprintf(stderr, "ac_collect: iter[%zu]: DONE\n", i_i);
-#endif
-			egi->info.to = AC_NO_STATE; /* done */
-		}
-	}
-
-	return 1;
-}
-
-static int
 analyze_closures__init_groups(struct analyze_closures_env *env)
 {
 	if (env->group_ceil == 0) {
@@ -951,115 +795,6 @@ analyze_closures__init_groups(struct analyze_closures_env *env)
 	return 1;
 }
 
-static enum ac_collect_res
-analyze_closures__collect(struct analyze_closures_env *env)
-{
-	/* All iterators have been stepped once, and any that didn't
-	 * finish immediately were added to the queue. Keep stepping
-	 * whichever is earliest (by .to state) until they're all done.
-	 * Merge (label set -> state) info along the way. */
-
-	if (ipriq_empty(env->pq)) {
-#if LOG_AC
-		fprintf(stderr, "ac_collect: empty\n");
-#endif
-		return AC_COLLECT_EMPTY;
-	}
-
-	size_t steps = 0;
-	while (!ipriq_empty(env->pq)) {
-		size_t next_i;
-		steps++;
-
-		if (!ipriq_pop(env->pq, &next_i)) {
-			assert(!"unreachable: non-empty, but pop failed");
-			return AC_COLLECT_ERROR;
-		}
-
-#if LOG_AC
-		fprintf(stderr, "ac_collect: popped %zu\n", next_i);
-#endif
-
-		assert(next_i < env->iter_count);
-		struct ac_iter *iter = &env->iters[next_i];
-		assert(iter->info.to != AC_NO_STATE);
-
-		/* If we are about to put the current iterator into the
-		 * priority queue only to pop it right back out again,
-		 * note what the next state is on the next iterator in
-		 * the queue and resume the current iterator as long as
-		 * we can. This saves a lot of time spent on pointless
-		 * queue bookkeeping. */
-		size_t next_next_i = 0;
-		fsm_state_t resume_current_limit = AC_NO_STATE;
-		if (ipriq_peek(env->pq, &next_next_i)) {
-			assert(next_next_i < env->iter_count);
-			struct ac_iter *next_iter = &env->iters[next_next_i];
-			assert(next_iter->info.to != AC_NO_STATE);
-			if (next_iter->info.to > iter->info.to) {
-				resume_current_limit = next_iter->info.to;
-			}
-		}
-
-advance_current_iterator:;
-
-		if (env->group_count + 1 == env->group_ceil) {
-			if (!analyze_closures__grow_groups(env)) {
-				return AC_COLLECT_ERROR;
-			}
-		}
-
-		assert(env->group_count < env->group_ceil);
-
-		struct ac_group *g = &env->groups[env->group_count];
-
-		if (g->to == AC_NO_STATE) { /* init new group */
-			memset(g, 0x00, sizeof(*g));
-			g->to = iter->info.to;
-			union_with(g->labels, iter->info.symbols);
-		} else if (g->to == iter->info.to) { /* update current group */
-			union_with(g->labels, iter->info.symbols);
-		} else {	/* switch to next group */
-			assert(iter->info.to > g->to);
-			env->group_count++;
-
-			if (env->group_count + 1 == env->group_ceil) {
-				if (!analyze_closures__grow_groups(env)) {
-					return AC_COLLECT_ERROR;
-				}
-			}
-			assert(env->group_count < env->group_ceil);
-
-			struct ac_group *ng = &env->groups[env->group_count];
-			memset(ng, 0x00, sizeof(*ng));
-			ng->to = iter->info.to;
-			union_with(ng->labels, iter->info.symbols);
-		}
-
-		if (edge_set_group_iter_next(&iter->iter, &iter->info)) {
-#if LOG_AC
-			fprintf(stderr, "ac_collect: iter %zu -- to %d\n",
-			    next_i, iter->info.to);
-#endif
-			if (resume_current_limit != AC_NO_STATE
-			    && iter->info.to < resume_current_limit) {
-				goto advance_current_iterator;
-			}
-			if (!ipriq_add(env->pq, next_i)) {
-				return AC_COLLECT_ERROR;
-			}
-		} else {
-#if LOG_AC
-			fprintf(stderr, "ac_collect: iter %zu -- DONE\n", next_i);
-#endif
-		}
-	}
-
-	env->group_count++;	/* commit current group */
-
-	return AC_COLLECT_DONE;
-}
-
 static int
 grow_clearing_vector(struct analyze_closures_env *env)
 {
@@ -1077,24 +812,288 @@ grow_clearing_vector(struct analyze_closures_env *env)
 	return 1;
 }
 
-static int
-analyze_closures__analyze(struct analyze_closures_env *env)
+#if EXPENSIVE_CHECKS
+static void
+assert_labels_are_disjoint(const struct analysis_result *r)
 {
-#if LOG_AC
-	/* Dump group table. */
+	/* verify that the labels sets are disjoint */
+	uint64_t seen[256/64] = { 0 };
+	for (size_t e_i = 0; e_i < r->count; e_i++) {
+		const struct result_entry *re = &r->entries[e_i];
+		for (size_t i = 0; i < 4; i++) {
+			assert((seen[i] & re->labels[i]) == 0);
+			seen[i] |= re->labels[i];
+		}
+	}
+}
+#endif
+
+static int
+analyze_closures__pairwise_grouping(struct analyze_closures_env *env,
+	interned_state_set_id iss_id)
+{
+#if LOG_GROUPING > 1
+	fprintf(stderr, "%s: iss_id %lu\n", __func__, iss_id);
+#endif
+
+	analyze_closures__init_groups(env);
+
+	INIT_TIMERS();
+	TIME(&pre);
+	struct state_set *ss = interned_state_set_get_state_set(env->issp, iss_id);
+	const size_t set_count = state_set_count(ss);
+
+#if LOG_DETERMINISE_STATE_SETS || LOG_GROUPING > 1
 	{
-		size_t g_i;
-		fprintf(stderr, "# group label/to closure table\n");
-		for (g_i = 0; g_i < env->group_count; g_i++) {
-			const struct ac_group *g = &env->groups[g_i];
-			fprintf(stderr,
-			    "g[%zu]: to %d: [0x%lx, 0x%lx, 0x%lx, 0x%lx] -- ",
-			    g_i, g->to,
-			    g->labels[0], g->labels[1],
-			    g->labels[2], g->labels[3]);
-			dump_labels(stderr, g->labels);
+		static size_t ss_id;
+		struct state_iter it;
+		fsm_state_t s;
+		fprintf(stderr, "ss %zu :", ss_id++);
+		state_set_reset(ss, &it);
+		while (state_set_next(&it, &s)) {
+			fprintf(stderr, " %d", s);
+		}
+		fprintf(stderr, "\n");
+	}
+#endif
+
+	/* grow buffers as necessary */
+	if (set_count > env->pbuf_ceil) {
+		size_t nceil = env->pbuf_ceil == 0
+		    ? DEF_PBUF_CEIL
+		    : 2*env->pbuf_ceil;
+		while (nceil < set_count) {
+			nceil *= 2;
+		}
+		fsm_state_t *a = f_realloc(env->alloc,
+		    env->pbuf[0],
+		    nceil * sizeof(env->pbuf[0]));
+		if (a == NULL) { return 0; }
+		fsm_state_t *b = f_realloc(env->alloc,
+		    env->pbuf[1],
+		    nceil * sizeof(env->pbuf[1]));
+		if (b == NULL) { return 0; }
+		env->pbuf_ceil = nceil;
+		env->pbuf[0] = a;
+		env->pbuf[1] = b;
+	}
+
+	{
+		/* init round 0
+		 * should be possible to do this using state_set_array */
+		size_t i = 0;
+		struct state_iter it;
+		fsm_state_t s;
+		state_set_reset(ss, &it);
+		while (state_set_next(&it, &s)) {
+			assert(i < env->pbuf_ceil);
+			env->pbuf[0][i] = s;
+			i++;
+		}
+	}
+
+	if (set_count == 1) {
+		const fsm_state_t id = env->pbuf[0][0];
+		assert(0 == (id & RESULT_BIT));
+		return analyze_single_state(env, id);
+	}
+
+	/* Reduce via pairwise merging, flip/flopping between the
+	 * two buffers, until there is only one state/pair id, then
+	 * intern the resulting state sets and push any new ones onto
+	 * the stack for later processing.
+	 *
+	 * Cache intermediate results of merging each pair. */
+	size_t round = 0;	/* used to flip buffers */
+	size_t cur_used = set_count;
+	size_t next_used = 0;
+
+	size_t cur_i = 0;
+	fsm_state_t *cbuf = env->pbuf[(round + 0) & 1];
+	fsm_state_t *nbuf = env->pbuf[(round + 1) & 1];
+
+	while (cur_used > 1) {
+#if LOG_GROUPING > 1
+		if (cur_i == 0) {
+			fprintf(stderr, "%s: round %zu:", __func__, round);
+			for (size_t i = 0; i < cur_used; i++) {
+				const fsm_state_t id = cbuf[i];
+				fprintf(stderr, " %d%s", ID_WITH_SUFFIX(id));
+			}
 			fprintf(stderr, "\n");
 		}
+#endif
+
+		if (cur_i == cur_used) { /* flip */
+			cur_used = next_used;
+			next_used = 0;
+			cur_i = 0;
+			round++;
+			cbuf = env->pbuf[(round + 0) & 1];
+			nbuf = env->pbuf[(round + 1) & 1];
+		} else if ((cur_used & 0x01) && cur_i == cur_used - 1) {
+			/* if the total count is odd and there's only one
+			 * left, bounce it to the next round, because
+			 * (count/2)+1 will be even */
+			assert(next_used + 1 < env->pbuf_ceil);
+			nbuf[next_used] = cbuf[cur_i];
+			next_used++;
+			cur_i++;
+		} else {
+			assert(cur_i + 2 <= cur_used);
+
+			/* Take two IDs, which are either state IDs or
+			 * result IDs, and get a result_id for the group with
+			 * their combined result. This will be cached, because
+			 * the same ID pairs tend to repeat frequently. */
+			fsm_state_t a = cbuf[cur_i++];
+			fsm_state_t b = cbuf[cur_i++];
+			fsm_state_t result_id = a; /* out-of-bounds value */
+			if (!combine_pair(env, a, b, &result_id)) {
+				return 0;
+			}
+#if LOG_GROUPING > 1
+			fprintf(stderr, "%s: combine_pair a %d, b %d => result_id %d\n",
+			    __func__, a, b, result_id);
+#endif
+			/* the result_id cannot match either of these */
+			result_id |= RESULT_BIT;
+			assert(result_id != a);
+			assert(result_id != b);
+			nbuf[next_used++] = result_id;
+		}
+	}
+
+	assert(cur_used == 1);
+	assert(cbuf[0] & RESULT_BIT);
+	const fsm_state_t result_id = cbuf[0] &~ RESULT_BIT;
+	assert(result_id < env->results.used);
+
+#if LOG_GROUPING > 1
+	fprintf(stderr, "%s: result %d in %zu rounds\n", __func__, result_id, round);
+#endif
+
+#if EXPENSIVE_CHECKS
+	assert_labels_are_disjoint(env->results.rs[result_id]);
+#endif
+
+	if (!build_output_from_cached_analysis(env, result_id)) {
+		return 0;
+	}
+	TIME(&post);
+	DIFF_MSEC("det_pairwise_grouping", pre, post, NULL);
+
+	return 1;
+}
+
+static int
+cache_single_state_analysis(struct analyze_closures_env *env, fsm_state_t state_id,
+    fsm_state_t *cached_result_id)
+{
+#if LOG_GROUPING > 1
+	fprintf(stderr, "%s: state_id %d\n", __func__, state_id);
+#endif
+
+	INIT_TIMERS();
+	TIME(&pre);
+
+	/* build up outputs
+	 *
+	 * info.to will be ascending
+	 *
+	 * look at analyze_closures__collect */
+	const struct fsm_state *s = &env->fsm->states[state_id];
+	struct edge_group_iter iter;
+	struct edge_group_iter_info info;
+
+	analyze_closures__init_groups(env);
+	assert(env->group_count == 0);
+
+	/* collect groups */
+	edge_set_group_iter_reset(s->edges, EDGE_GROUP_ITER_ALL, &iter);
+	while (edge_set_group_iter_next(&iter, &info)) {
+#if LOG_GROUPING > 2
+		fprintf(stderr, "%s: to %d, symbols 0x%016lx%016lx%016lx%016lx\n",
+		    __func__, info.to,
+		    info.symbols[0], info.symbols[1], info.symbols[2], info.symbols[3]);
+#endif
+
+		if (env->group_count + 1 == env->group_ceil) {
+			if (!analyze_closures__grow_groups(env)) {
+				return 0;
+			}
+		}
+		assert(env->group_count < env->group_ceil);
+		struct ac_group *g = &env->groups[env->group_count];
+
+		if (g->to == AC_NO_STATE) { /* init new group */
+			memset(g, 0x00, sizeof(*g));
+			g->to = info.to;
+			union_with(g->labels, info.symbols);
+		} else if (g->to == info.to) { /* update current group */
+			union_with(g->labels, info.symbols);
+		} else {	/* switch to next group */
+			assert(info.to > g->to);
+			env->group_count++;
+
+			if (env->group_count + 1 == env->group_ceil) {
+				if (!analyze_closures__grow_groups(env)) {
+					return 0;
+				}
+			}
+			assert(env->group_count < env->group_ceil);
+
+			struct ac_group *ng = &env->groups[env->group_count];
+			memset(ng, 0x00, sizeof(*ng));
+			ng->to = info.to;
+			union_with(ng->labels, info.symbols);
+		}
+	}
+	if (env->groups[env->group_count].to != AC_NO_STATE) {
+		env->group_count++;	/* commit current group */
+	}
+
+	/* Initialize words_used for each group. */
+	for (size_t g_i = 0; g_i < env->group_count; g_i++) {
+		size_t w_i;
+		uint8_t bit;
+		struct ac_group *g = &env->groups[g_i];
+		g->words_used = 0;
+		for (w_i = 0, bit = 0x01; w_i < 4; w_i++, bit <<= 1) {
+			if (g->labels[w_i] != 0) {
+				g->words_used |= bit;
+			}
+		}
+	}
+
+	if (env->group_count == 0) {
+#if LOG_GROUPING > 1
+		fprintf(stderr, "Caching empty group analysis\n");
+#endif
+
+		if (!commit_buffered_result(env, cached_result_id)) {
+			return 0;
+		}
+#if LOG_GROUPING > 1
+		fprintf(stderr, "%s: cached analysis as result %d\n", __func__, *cached_result_id);
+#endif
+
+		if (!analysis_cache_save_single_state(env, state_id, *cached_result_id)) {
+			return 0;
+		}
+
+		TIME(&post);
+		DIFF_MSEC("cache_single_state_analysis_0", pre, post, &env->usec_single);
+		env->count_single++;
+		return 1;
+	}
+
+	/* now we have groups */
+#if LOG_GROUPING > 1
+	for (size_t i = 0; i < env->group_count; i++) {
+		const struct ac_group *g = &env->groups[i];
+		fprintf(stderr, "%s: group[%zu]: to %d, labels 0x%016lx%016lx%016lx%016lx\n",
+		    __func__, i, g->to, g->labels[0], g->labels[1], g->labels[2], g->labels[3]);
 	}
 #endif
 
@@ -1120,7 +1119,7 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 	 * clearing. Casual experiments suggested small improvements but
 	 * not drastic improvements, so I'm leaving that performance
 	 * work for later. */
-	size_t base_i, g_i, o_i; /* base_i, group_i, other_i */
+	size_t base_i, o_i; /* base_i, other_i */
 
 	base_i = 0;
 	env->output_count = 0;
@@ -1128,19 +1127,6 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 	if (env->dst_ceil == 0) {
 		if (!analyze_closures__grow_dst(env)) {
 			return 0;
-		}
-	}
-
-	/* Initialize words_used for each group. */
-	for (g_i = 0; g_i < env->group_count; g_i++) {
-		size_t w_i;
-		uint8_t bit;
-		struct ac_group *g = &env->groups[g_i];
-		g->words_used = 0;
-		for (w_i = 0, bit = 0x01; w_i < 4; w_i++, bit <<= 1) {
-			if (g->labels[w_i] != 0) {
-				g->words_used |= bit;
-			}
 		}
 	}
 
@@ -1239,16 +1225,19 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 			fprintf(stderr, "\n");
 		}
 
-		{		/* build the state set and add to the output */
-#if LOG_AC > 1
-			fprintf(stderr, "ac_analyze: building interned_state_set with %zu states:", dst_count);
-#endif
-			interned_state_set_id iss;
-			if (!interned_state_set_intern_set(env->issp, dst_count, env->dst, &iss)) {
-				return 0;
+		{		/* add dst set and labels to buffer */
+#if LOG_GROUPING > 1
+			fprintf(stderr, "-- dst [");
+			for (size_t i = 0; i < dst_count; i++) {
+				fprintf(stderr, "%s%d", i > 0 ? " " : "", env->dst[i]);
 			}
-
-			if (!analyze_closures__save_output(env, labels, iss)) {
+			fprintf(stderr, "] <- labels 0x%016lx%016lx%016lx%016lx\n",
+			    labels[0], labels[1], labels[2], labels[3]);
+#endif
+			/* reserve to-set and copy env->dst[] there */
+			/* push a group onto env->results.buffer.entries[] */
+			if (!add_group_dst_info_to_buffer(env,
+				dst_count, env->dst, labels)) {
 				return 0;
 			}
 		}
@@ -1261,16 +1250,996 @@ analyze_closures__analyze(struct analyze_closures_env *env)
 		}
 	}
 
-#if LOG_AC
-	fprintf(stderr, "ac_analyze: done\n");
+	if (!commit_buffered_result(env, cached_result_id)) {
+		return 0;
+	}
+#if LOG_GROUPING > 1
+	fprintf(stderr, "%s: cached analysis as result %d\n", __func__, *cached_result_id);
 #endif
+
+	if (!analysis_cache_save_single_state(env, state_id, *cached_result_id)) {
+		return 0;
+	}
+
+	TIME(&post);
+	DIFF_MSEC(__func__, pre, post, &env->usec_single);
+	env->count_single++;
+	return 1;
+}
+
+static int
+analyze_single_state(struct analyze_closures_env *env, fsm_state_t id)
+{
+	assert(id < env->fsm->statecount);
+	fsm_state_t cached_result_id;
+	if (!analysis_cache_check_single_state(env, id, &cached_result_id)) {
+		if (!cache_single_state_analysis(env, id, &cached_result_id)) {
+			return 0;
+		}
+	}
+
+	return build_output_from_cached_analysis(env, cached_result_id);
+}
+
+static int
+build_output_from_cached_analysis(struct analyze_closures_env *env, fsm_state_t cached_result_id)
+{
+	/* collect (ISS, labels) outputs for single group */
+	const struct analysis_result *r = env->results.rs[cached_result_id];
+	for (size_t i = 0; i < r->count; i++) {
+		const struct result_entry *e = &r->entries[i];
+		const uint64_t *labels = e->labels;
+
+		const size_t dst_count = e->to_set_count;
+		assert(e->to_set_offset + dst_count <= env->to_sets.used);
+		const fsm_state_t *dst = &env->to_sets.buf[e->to_set_offset];
+
+		interned_state_set_id iss;
+		if (!interned_state_set_intern_set(env->issp, dst_count, dst, &iss)) {
+			return 0;
+		}
+
+		if (!analyze_closures__save_output(env, labels, iss)) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+#define LOG_TO_SET_HTAB 0
+
+SUPPRESS_EXPECTED_UNSIGNED_INTEGER_OVERFLOW()
+static uint64_t
+to_set_hash(size_t count, const fsm_state_t *ids)
+{
+	uint64_t h = hash_id(count);
+	for (size_t i = 0; i < count; i++) {
+		h += hash_id(ids[i]);
+	}
+	return h;
+}
+
+static int
+to_set_htab_check(struct analyze_closures_env *env,
+    size_t count, const fsm_state_t *dst, uint64_t *hash, uint32_t *out_offset)
+{
+	const uint64_t h = to_set_hash(count, dst);
+	*hash = h;
+
+	struct to_set_htab *htab = &env->to_set_htab;
+	const size_t bcount = htab->bucket_count;
+	if (bcount == 0) {
+		return 0;
+	}
+
+	const uint64_t mask = bcount - 1;
+	for (size_t b_i = 0; b_i < bcount; b_i++) {
+		const struct to_set_bucket *b = &htab->buckets[(h + b_i) & mask];
+		if (b->count == 0) {
+			return 0; /* empty bucket -> not found */
+		} else if (b->count == count) {
+			assert(b->offset + count <= env->to_sets.used);
+			const fsm_state_t *ids = &env->to_sets.buf[b->offset];
+			if (0 == memcmp(ids, dst, count * sizeof(dst[0]))) {
+				*out_offset = b->offset;
+
+				return 1; /* cache hit */
+			} else {
+				continue; /* collision */
+			}
+		} else {
+			continue; /* collision */
+		}
+	}
+
+	return 0;
+}
+
+static int
+to_set_htab_save(struct analyze_closures_env *env,
+    size_t count, uint64_t hash, uint32_t offset)
+{
+	struct to_set_htab *htab = &env->to_set_htab;
+	if (htab->buckets_used >= htab->bucket_count/2) {
+		const uint64_t ocount = htab->bucket_count;
+		const size_t ncount = (ocount == 0
+		    ? DEF_TO_SET_HTAB_BUCKET_COUNT
+		    : 2*ocount);
+#if LOG_TO_SET_HTAB
+		fprintf(stderr, "%s: growing %zu -> %zu\n",
+		    __func__, ocount, ncount);
+#endif
+		struct to_set_bucket *nbuckets = f_calloc(env->alloc,
+		    ncount, sizeof(nbuckets[0]));
+		if (nbuckets == NULL) {
+			return 0;
+		}
+
+		const struct to_set_bucket *obuckets = htab->buckets;
+		const uint64_t nmask = ncount - 1;
+		if (ocount > 0) {
+			for (size_t ob_i = 0; ob_i < ocount; ob_i++) {
+				const struct to_set_bucket *ob = &obuckets[ob_i];
+				if (ob->count == 0) {
+					continue; /* empty */
+				}
+				assert(ob->offset + ob->count <= env->to_sets.used);
+				const fsm_state_t *ids = &env->to_sets.buf[ob->offset];
+				const uint64_t h = to_set_hash(ob->count, ids);
+
+				for (size_t nb_i = 0; nb_i < ncount; nb_i++) {
+					struct to_set_bucket *nb = &nbuckets[(h + nb_i) & nmask];
+					if (nb->count == 0) {
+						nb->count = ob->count;
+						nb->offset = ob->offset;
+						break;
+					} else {
+						continue; /* collision */
+					}
+				}
+			}
+		}
+		f_free(env->alloc, htab->buckets);
+		htab->buckets = nbuckets;
+		htab->bucket_count = ncount;
+	}
+
+	const size_t bcount = htab->bucket_count;
+	assert(htab->buckets_used <= bcount/2);
+	assert(bcount > 1);
+	const uint64_t mask = bcount - 1;
+	for (size_t b_i = 0; b_i < htab->bucket_count; b_i++) {
+		struct to_set_bucket *b = &htab->buckets[(hash + b_i) & mask];
+		if (b->count == 0) {
+			b->count = count;
+			b->offset = offset;
+			htab->buckets_used++;
+			return 1;
+		} else if (b->count == count) {
+			assert(b->offset != offset); /* no duplicates */
+			continue; /* collision */
+		}
+	}
+
+	assert(!"unreachable");
+	return 0;
+}
+
+static int
+save_to_set(struct analyze_closures_env *env,
+    size_t count, const fsm_state_t *dst, uint32_t *out_offset)
+{
+#define LOG_TO_SET 0
+	/* dst should not be a pointer into the to_sets buffer,
+	 * because it can be relocated. */
+	if (env->to_sets.buf != NULL) {
+		assert(dst < &env->to_sets.buf[0]
+		    || dst >= &env->to_sets.buf[env->to_sets.ceil]);
+	}
+
+	/* There is substantial duplication of these sets, so
+	 * check the cache hash table first. */
+	uint64_t hash;
+	if (to_set_htab_check(env, count, dst, &hash, out_offset)) {
+		return 1;
+	}
+
+	if (env->to_sets.used + count >= env->to_sets.ceil) {
+		size_t nceil = (env->to_sets.ceil == 0
+		    ? DEF_TO_SET_CEIL
+		    : 2*env->to_sets.ceil);
+		while (nceil < env->to_sets.used + count) {
+			nceil *= 2;
+		}
+
+#if LOG_GROUPING || LOG_TO_SET
+		fprintf(stderr, "%s: growing %zu -> %zu\n",
+		    __func__, env->to_sets.ceil, nceil);
+#endif
+		fsm_state_t *nbuf = f_realloc(env->alloc, env->to_sets.buf,
+		    nceil * sizeof(nbuf[0]));
+		if (nbuf == NULL) {
+			return 0;
+		}
+		env->to_sets.ceil = nceil;
+		env->to_sets.buf = nbuf;
+	}
+
+#if LOG_TO_SET
+	static size_t to_set_id;
+	fprintf(stderr, "%s: %zu:", __func__, to_set_id++);
+	for (size_t i = 0; i < count; i++) {
+		fprintf(stderr, " %d", dst[i]);
+	}
+	fprintf(stderr, "\n");
+#endif
+
+	uint32_t offset = env->to_sets.used;
+	assert(offset + count <= env->to_sets.ceil);
+	memcpy(&env->to_sets.buf[offset], dst, count * sizeof(dst[0]));
+	env->to_sets.used += count;
+	assert(env->to_sets.used <= env->to_sets.ceil);
+
+	if (!to_set_htab_save(env, count, hash, offset)) {
+		return 0;
+	}
+
+	*out_offset = offset;
+	return 1;
+}
+
+static int
+add_group_dst_info_to_buffer(struct analyze_closures_env *env,
+	size_t dst_count, const fsm_state_t *dst,
+	const uint64_t labels[256/64])
+{
+	struct result_buffer *buf = &env->results.buffer;
+
+	if (buf->used == buf->ceil) {
+		const size_t nceil = (buf->ceil == 0
+		    ? DEF_GROUP_BUFFER_CEIL
+		    : 2*buf->ceil);
+		struct result_entry *nentries = f_realloc(env->alloc,
+		    buf->entries, nceil * sizeof(buf->entries[0]));
+		if (nentries == NULL) { return 0; }
+		buf->entries = nentries;
+		buf->ceil = nceil;
+	}
+
+	struct result_entry *ge = &buf->entries[buf->used];
+	if (!save_to_set(env, dst_count, dst,
+		&ge->to_set_offset)) {
+		return 0;
+	}
+	ge->to_set_count = dst_count;
+	ge->words_used = 0;
+	memcpy(ge->labels, labels, sizeof(ge->labels));
+
+	for (size_t i = 0; i < 4; i++) {
+		if (labels[i] != 0) {
+			ge->words_used |= (uint8_t)1 << i;
+		}
+	}
+
+	buf->used++;
+	return 1;
+}
+
+static int
+commit_buffered_result(struct analyze_closures_env *env, uint32_t *cache_result_id)
+{
+#define LOG_COMMIT_BUFFERED_GROUP 0
+
+	/* Based on logging hashes from benchmarks, there is usually
+	 * little to no duplication here, so they are stored as-is. */
+
+	if (env->results.used == env->results.ceil) {
+		const size_t nceil = (env->results.ceil == 0
+		    ? DEF_GROUP_GS
+		    : 2*env->results.ceil);
+		struct analysis_result **nrs = f_realloc(env->alloc,
+		    env->results.rs, nceil * sizeof(env->results.rs[0]));
+#if LOG_GROUPING || LOG_COMMIT_BUFFERED_GROUP
+		fprintf(stderr, "%s: growing %zu -> %zu\n",
+		    __func__, env->results.ceil, nceil);
+#endif
+		if (nrs == NULL) {
+			return 0;
+		}
+		env->results.ceil = nceil;
+		env->results.rs = nrs;
+	}
+
+	struct analysis_result *nr;
+	const size_t alloc_sz = sizeof(*nr)
+	    + env->results.buffer.used * sizeof(nr->entries[0]);
+	nr = f_malloc(env->alloc, alloc_sz);
+#if LOG_GROUPING || LOG_COMMIT_BUFFERED_GROUP
+	fprintf(stderr, "%s: alloc %zu\n",
+	    __func__, sizeof(*nr) + env->results.buffer.used * sizeof(nr->entries[0]));
+#endif
+	if (nr == NULL) {
+		return 0;
+	}
+	nr->count = env->results.buffer.used;
+
+	if (nr->count > 0) {
+		assert(env->results.buffer.entries != NULL);
+		memcpy(&nr->entries[0], env->results.buffer.entries,
+		    nr->count * sizeof(env->results.buffer.entries[0]));
+#if LOG_GROUPING || LOG_COMMIT_BUFFERED_GROUP
+		fprintf(stderr, "%s: alloc %zu, hash 0x%016lx\n",
+		    __func__, alloc_sz, hash_fnv1a_64((const uint8_t *)nr, alloc_sz));
+#endif
+	}
+
+#if EXPENSIVE_CHECKS
+	assert_labels_are_disjoint(nr);
+#endif
+
+	const uint32_t cache_id = env->results.used;
+	env->results.rs[cache_id] = nr;
+	env->results.used++;
+
+	/* clear buffer */
+	env->results.buffer.used = 0;
+
+	*cache_result_id = cache_id;
+	return 1;
+}
+
+#define LOG_CACHE_HTAB 0
+#if LOG_CACHE_HTAB
+#define CACHE_HTAB_INIT_STATS()			\
+	size_t collisions = 0;			\
+	static size_t max_collisions
+#define CACHE_HTAB_INC_COLLISIONS() collisions++
+#define COLLISION_LIMIT 100
+#define CACHE_HTAB_PRINT_COLLISIONS(TAG, PA, PB, H)			\
+	if (collisions > max_collisions) {				\
+		max_collisions = collisions;				\
+		fprintf(stderr, "%s: %s: new max_collisions: %zu\n",	\
+		    __func__, TAG, max_collisions);			\
+	} else if (LOG_CACHE_HTAB > 1					\
+	    || collisions > COLLISION_LIMIT) {				\
+		fprintf(stderr,						\
+		    "%s: %s: collisions %zu, { %d, %d } -> %016lx\n",	\
+		    __func__, TAG, collisions,				\
+		    PA &~ RESULT_BIT,					\
+		    PB &~ RESULT_BIT,					\
+		    H);							\
+		assert(collisions < COLLISION_LIMIT);			\
+	}
+#define CACHE_HTAB_DUMP(ENV) dump_pair_cache_htab(env)
+#else
+#define CACHE_HTAB_INIT_STATS()
+#define CACHE_HTAB_INC_COLLISIONS()
+#define CACHE_HTAB_PRINT_COLLISIONS(TAG, PA, PB, H)
+#define CACHE_HTAB_DUMP(ENV)
+#endif
+
+SUPPRESS_EXPECTED_UNSIGNED_INTEGER_OVERFLOW()
+static uint64_t
+hash_pair(fsm_state_t a, fsm_state_t b)
+{
+	assert(a != b);
+	assert(a & RESULT_BIT);
+	assert(b & RESULT_BIT);
+	a &=~ RESULT_BIT;
+	b &=~ RESULT_BIT;
+
+	/* Don't hash a and b separately and combine them with
+	 * hash_id, because it's common to have adjacent pairs of
+	 * result IDs, and with how hash_id works that leads to
+	 * multiples of similar hash values bunching up.
+	 *
+	 * This could be replaced with a better hash function later,
+	 * but use LOG_CACHE_HTAB to ensure there aren't visually obvious
+	 * runs of collisions appearing in the tables. */
+	const uint64_t res = hash_id(a + b);
+	/* fprintf(stderr, "%s: a %d, b %d -> %016lx\n", __func__, a, b, res); */
+	return res;
+}
+
+static int
+analysis_cache_check_pair(struct analyze_closures_env *env, fsm_state_t pa, fsm_state_t pb,
+	fsm_state_t *result_id)
+{
+	assert(pa & RESULT_BIT);
+	assert(pb & RESULT_BIT);
+
+	const struct result_pair_htab *htab = &env->htab;
+	if (htab->bucket_count == 0) {
+#if LOG_GROUPING > 1
+		fprintf(stderr, "%s: empty cache -> cache miss for pair { %d_R, %d_R }\n",
+		    __func__, pa &~ RESULT_BIT, pb &~ RESULT_BIT);
+#endif
+		return 0;
+	}
+
+	const uint64_t h = hash_pair(pa, pb);
+	const uint64_t mask = htab->bucket_count - 1;
+
+	CACHE_HTAB_INIT_STATS();
+
+	for (size_t i = 0; i < htab->bucket_count; i++) {
+		struct result_pair_bucket *b = &htab->buckets[(h + i) & mask];
+		if (b->t == RPBT_UNUSED) {
+			break;	/* not found */
+		} else if (b->t == RPBT_PAIR && b->ids[0] == pa && b->ids[1] == pb) {
+			*result_id = b->result_id; /* hit */
+#if LOG_GROUPING > 1
+			fprintf(stderr, "%s: cache hit for pair { %d_R, %d_R } => %d\n",
+			    __func__, pa, pb, b->result_id);
+#endif
+
+			CACHE_HTAB_PRINT_COLLISIONS("hit", pa, pb, h);
+			return 1;
+		} else {
+			CACHE_HTAB_INC_COLLISIONS();
+			continue; /* collision */
+		}
+	}
+
+#if LOG_GROUPING > 1
+	fprintf(stderr, "%s: cache miss for pair { %d_R, %d_R }\n",
+	    __func__, pa, pb);
+#endif
+
+	CACHE_HTAB_PRINT_COLLISIONS("miss", pa, pb, h);
+
+	return 0;
+}
+
+static int
+analysis_cache_check_single_state(struct analyze_closures_env *env, fsm_state_t id,
+	fsm_state_t *result_id)
+{
+	assert(0 == (id & RESULT_BIT));
+	const struct result_pair_htab *htab = &env->htab;
+	if (htab->bucket_count == 0) {
+#if LOG_GROUPING > 1
+		fprintf(stderr, "%s: empty cache -> cache miss for state %d\n",
+		    __func__, id);
+#endif
+		return 0;
+	}
+
+	CACHE_HTAB_INIT_STATS();
+
+	const uint64_t h = hash_id(id);
+	const uint64_t mask = htab->bucket_count - 1;
+	for (size_t i = 0; i < htab->bucket_count; i++) {
+		struct result_pair_bucket *b = &htab->buckets[(h + i) & mask];
+		if (b->t == RPBT_UNUSED) {
+			break;	/* not found */
+		} else if (b->t == RPBT_SINGLE_STATE && b->ids[0] == id) {
+			assert(b->ids[1] == id);
+			*result_id = b->result_id; /* hit */
+#if LOG_GROUPING > 1
+			fprintf(stderr, "%s: cache hit for state %d -> result_id %d\n",
+			    __func__, id, b->result_id);
+#endif
+			CACHE_HTAB_PRINT_COLLISIONS("hit", id, id, h);
+			return 1;
+		} else {
+			CACHE_HTAB_INC_COLLISIONS();
+			continue; /* collision */
+		}
+	}
+
+#if LOG_GROUPING > 1
+	fprintf(stderr, "%s: cache miss for state %d\n",
+	    __func__, id);
+#endif
+
+	CACHE_HTAB_PRINT_COLLISIONS("miss", id, id, h);
+	return 0;
+}
+
+#if LOG_GROUPING
+static void
+dump_group(FILE *f, struct analyze_closures_env *env, const struct analysis_result *r)
+{
+	for (size_t i = 0; i < r->count; i++) {
+		const struct result_entry *e = &r->entries[i];
+		const uint64_t *labels = e->labels;
+		fprintf(f, "-- 0x%016lx%016lx%016lx%016lx -> [",
+		    labels[0], labels[1], labels[2], labels[3]);
+		for (size_t to_i = 0; to_i < e->to_set_count; to_i++) {
+			fprintf(f, "%s%d", to_i > 0 ? " " : "",
+			    env->to_sets.buf[e->to_set_offset + to_i]);
+		}
+		fprintf(f, "]\n");
+	}
+}
+#endif
+
+#if LOG_CACHE_HTAB
+static void
+dump_pair_cache_htab(const struct analyze_closures_env *env)
+{
+	unsigned bits = 0;
+	size_t total = 0;
+	const size_t bucket_count = env->htab.bucket_count;
+	fprintf(stderr, "### pair_htab, %zu buckets\n", bucket_count);
+	for (size_t i = 0; i < bucket_count; i++) {
+		if (env->htab.buckets[i].t != RPBT_UNUSED) {
+			bits++;
+		}
+
+		if ((i & 7) == 7) {
+			fprintf(stderr, "%c",
+			    bits == 0 ? '.' : ('0' + bits));
+			total += bits;
+			bits = 0;
+		}
+
+		if ((i & 511) == 511) { /* 64 cells/row */
+			fprintf(stderr, "\n");
+		}
+	}
+
+	if (bucket_count < 512) {
+		fprintf(stderr, "\n");
+	}
+	fprintf(stderr, "used: %zu/%zu\n", total, bucket_count);
+}
+#endif
+
+static int
+pair_cache_save(struct analyze_closures_env *env,
+	enum result_pair_bucket_type type,
+	fsm_state_t pa, fsm_state_t pb, fsm_state_t result_id)
+{
+	if (type == RPBT_SINGLE_STATE) {
+		assert(pa == pb);
+		assert(0 == (pa & RESULT_BIT));
+	} else {
+		assert(type == RPBT_PAIR);
+		assert(pa != pb);
+		assert(pa & RESULT_BIT);
+		assert(pb & RESULT_BIT);
+	}
+
+#if LOG_GROUPING > 1
+	fprintf(stderr, "%s: type %s { %d%s, %d%s } => %d\n",
+	    __func__,
+	    type == RPBT_SINGLE_STATE ? "SINGLE" : "PAIR",
+	    ID_WITH_SUFFIX(pa), ID_WITH_SUFFIX(pb), result_id);
+#endif
+
+	CACHE_HTAB_INIT_STATS();
+
+	struct result_pair_htab *htab = &env->htab;
+	if (htab->buckets_used >= htab->bucket_count/2) {
+		const size_t ncount = (htab->bucket_count == 0
+		    ? DEF_PAIR_CACHE_HTAB_BUCKET_COUNT
+		    : 2*htab->bucket_count);
+		struct result_pair_bucket *nbuckets = f_calloc(env->alloc,
+		    ncount, sizeof(nbuckets[0]));
+		if (nbuckets == NULL) {
+			return 0;
+		}
+
+		if (htab->bucket_count > 0) {
+			const uint32_t ocount = htab->bucket_count;
+			const uint32_t nmask = ncount - 1;
+			CACHE_HTAB_DUMP(env);
+			for (size_t ob_i = 0; ob_i < ocount; ob_i++) {
+				const struct result_pair_bucket *ob = &htab->buckets[ob_i];
+				if (ob->t == RPBT_UNUSED) {
+					continue;
+				}
+
+				const uint64_t h = (ob->t == RPBT_SINGLE_STATE
+				    ? hash_id(ob->ids[0])
+				    : hash_pair(ob->ids[0], ob->ids[1]));
+				if (ob->t == RPBT_SINGLE_STATE) {
+					assert(ob->ids[0] == ob->ids[1]);
+				}
+
+				for (size_t nb_i = 0; nb_i < ncount; nb_i++) {
+					struct result_pair_bucket *nb = &nbuckets[(h + nb_i) & nmask];
+					if (nb->t == RPBT_UNUSED) {
+						memcpy(nb, ob, sizeof(*ob));
+						break;
+					} else {
+						continue; /* collision */
+					}
+				}
+			}
+			f_free(env->alloc, htab->buckets);
+		}
+		htab->buckets = nbuckets;
+		htab->bucket_count = ncount;
+	}
+
+	const uint64_t h = (pa == pb
+	    ? hash_id(pa)
+	    : (hash_pair(pa, pb)));
+
+	const uint64_t mask = htab->bucket_count - 1;
+	for (size_t i = 0; i < htab->bucket_count; i++) {
+		const size_t b_id = (h + i) & mask;
+		struct result_pair_bucket *b = &htab->buckets[b_id];
+#if LOG_GROUPING > 1
+		fprintf(stderr, "%s: bucket[%zu]: t %d, ids[%d%s %d%s], result_id %d\n",
+		    __func__, b_id, b->t,
+		    ID_WITH_SUFFIX(b->ids[0]), ID_WITH_SUFFIX(b->ids[1]),
+		    b->result_id);
+#endif
+
+		if (b->t == RPBT_UNUSED) { /* empty */
+			b->ids[0] = pa;
+			b->ids[1] = pb;
+			b->t = type;
+			b->result_id = result_id;
+			htab->buckets_used++;
+
+#if LOG_GROUPING > 1
+			const struct analysis_result *r = env->results.rs[result_id];
+			if (b->t == RPBT_SINGLE_STATE) {
+				fprintf(stderr, "%s: cached result_id %u for single state %d_s, with %u entries, in bucket %zu:\n",
+				    __func__, result_id, pa, r->count, b_id);
+			} else {
+				fprintf(stderr, "%s: cached result_id %u for { %d_R, %d_R }, with %u entries, in bucket %zu:\n",
+				    __func__, result_id, pa &~ RESULT_BIT, pb &~ RESULT_BIT, r->count, b_id);
+			}
+			dump_group(stderr, env, r);
+#endif
+
+			CACHE_HTAB_PRINT_COLLISIONS("saved", pa, pb, h);
+			return 1;
+		} else {
+			/* should not save duplicates */
+			assert(b->ids[0] != pa || b->ids[1] != pb);
+			CACHE_HTAB_INC_COLLISIONS();
+			continue; /* collision */
+		}
+	}
+
+	assert(!"unreachable");
+	return 0;
+}
+
+static int
+analysis_cache_save_single_state(struct analyze_closures_env *env,
+	fsm_state_t state_id, fsm_state_t result_id)
+{
+	assert(0 == (state_id & RESULT_BIT));
+	return pair_cache_save(env, RPBT_SINGLE_STATE, state_id, state_id, result_id);
+}
+
+static int
+analysis_cache_save_pair(struct analyze_closures_env *env,
+	fsm_state_t a, fsm_state_t b, fsm_state_t result_id)
+{
+	assert(a != b);
+	return pair_cache_save(env, RPBT_PAIR, a | RESULT_BIT, b | RESULT_BIT, result_id);
+}
+
+static size_t pair_cache_hit, pair_cache_miss;
+
+static int
+combine_pair(struct analyze_closures_env *env, fsm_state_t pa, fsm_state_t pb,
+	fsm_state_t *result_id)
+{
+#if LOG_GROUPING
+	fprintf(stderr, "%s: pa %d, pb %d\n", __func__, pa, pb);
+#endif
+
+	/* If the IDs are for single states, check if they've already been
+	 * analyzed. If not, do that and cache it. Either way, switch to the
+	 * ID for their cached analysis result. */
+	if (0 == (pa & RESULT_BIT)) {
+		fsm_state_t cached_result_id;
+		if (!analysis_cache_check_single_state(env, pa, &cached_result_id)) {
+			if (!cache_single_state_analysis(env, pa, &cached_result_id)) {
+				return 0;
+			}
+		}
+		pa = cached_result_id | RESULT_BIT;
+	}
+
+	if (0 == (pb & RESULT_BIT)) {
+		fsm_state_t cached_result_id;
+		if (!analysis_cache_check_single_state(env, pb, &cached_result_id)) {
+			if (!cache_single_state_analysis(env, pb, &cached_result_id)) {
+				return 0;
+			}
+		}
+		pb = cached_result_id | RESULT_BIT;
+	}
+
+	if (analysis_cache_check_pair(env, pa, pb, result_id)) {
+#if LOG_GROUPING
+		fprintf(stderr, "%s: cache hit for { %d%s %d%s }: %d\n",
+		    __func__, ID_WITH_SUFFIX(pa), ID_WITH_SUFFIX(pb), *result_id);
+#endif
+		pair_cache_hit++;
+		return 1;
+	} else {
+#if LOG_GROUPING
+		fprintf(stderr, "%s: cache miss for { %d%s %d%s }\n",
+		    __func__, ID_WITH_SUFFIX(pa), ID_WITH_SUFFIX(pb));
+#endif
+		pair_cache_miss++;
+	}
+
+	assert((pa & RESULT_BIT) && (pb & RESULT_BIT));
+	pa &=~ RESULT_BIT;
+	pb &=~ RESULT_BIT;
+
+	if (!combine_result_pair_and_commit(env, pa, pb, result_id)) {
+		return 0;
+	}
+
+#if LOG_GROUPING
+	fprintf(stderr, "%s: combined and committed as result_id %d\n",
+	    __func__, *result_id);
+#endif
+
+	if (!analysis_cache_save_pair(env, pa, pb, *result_id)) {
+		return 0;
+	}
+
+	return 1;
+}
+
+#if EXPENSIVE_CHECKS
+static void
+assert_entry_labels_are_mutually_exclusive(const struct analysis_result *r)
+{
+	uint64_t seen[4] = { 0 };
+	for (size_t e_i = 0; e_i < r->count; e_i++) {
+		const struct result_entry *e = &r->entries[e_i];
+		const uint64_t *labels = e->labels;
+		for (size_t i = 0; i < 4; i++) {
+			assert((seen[i] & labels[i]) == 0);
+			seen[i] |= labels[i];
+		}
+	}
+}
+#endif
+
+static int
+cmp_fsm_state_t(const void *pa, const void *pb)
+{
+	const fsm_state_t a = *(const fsm_state_t *)pa;
+	const fsm_state_t b = *(const fsm_state_t *)pb;
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static void
+sort_and_dedup_dst_buf(fsm_state_t *buf, size_t *used)
+{
+	const size_t orig_used = *used;
+	qsort(buf, orig_used, sizeof(buf[0]), cmp_fsm_state_t);
+
+	/* squash out duplicates */
+	size_t rd = 1;
+	size_t wr = 1;
+	while (rd < orig_used) {
+		if (buf[rd - 1] == buf[rd]) {
+			rd++;	/* skip */
+		} else {
+			buf[wr] = buf[rd];
+			rd++;
+			wr++;
+		}
+	}
+
+	*used = wr;
+#if EXPENSIVE_CHECKS
+	assert(wr <= orig_used);
+	for (size_t i = 1; i < *used; i++) {
+		assert(buf[i - 1] < buf[i]);
+	}
+#endif
+}
+
+static int
+dst_tmp_buf_append(struct analyze_closures_env *env,
+    fsm_state_t id)
+{
+	if (env->dst_tmp.used == env->dst_tmp.ceil) {
+		const size_t nceil = (env->dst_tmp.ceil == 0
+		    ? DEF_DST_TMP_CEIL
+		    : 2*env->dst_tmp.ceil);
+		fsm_state_t *nbuf = f_realloc(env->alloc, env->dst_tmp.buf,
+		    nceil * sizeof(nbuf[0]));
+		if (nbuf == NULL) {
+			return 0;
+		}
+		env->dst_tmp.buf = nbuf;
+		env->dst_tmp.ceil = nceil;
+	}
+	env->dst_tmp.buf[env->dst_tmp.used] = id;
+	env->dst_tmp.used++;
+	return 1;
+}
+
+static int
+combine_result_pair_and_commit(struct analyze_closures_env *env,
+    fsm_state_t result_id_a, fsm_state_t result_id_b,
+    fsm_state_t *committed_result_id)
+{
+	INIT_TIMERS();
+	TIME(&pre);
+
+	assert(result_id_a < env->results.used);
+	assert(result_id_b < env->results.used);
+	const struct analysis_result *ra = env->results.rs[result_id_a];
+	const struct analysis_result *rb = env->results.rs[result_id_b];
+
+	#if LOG_GROUPING
+	fprintf(stderr, "\n");
+	fprintf(stderr, "%s: result_id a %d, %u entries\n", __func__, result_id_a, ra->count);
+	dump_group(stderr, env, ra);
+	fprintf(stderr, "%s: result_id b %d, %u entries\n", __func__, result_id_b, rb->count);
+	dump_group(stderr, env, rb);
+	#endif
+
+	#if EXPENSIVE_CHECKS
+	assert_entry_labels_are_mutually_exclusive(ra);
+	assert_entry_labels_are_mutually_exclusive(rb);
+	#endif
+
+	/* For whichever group is smaller (has less entries), find every overlap
+	 * it has with the other, and then emit all remaning from the other as-is. */
+	const struct analysis_result *rl = (ra->count <= rb->count ? ra : rb);
+	const struct analysis_result *rr = (ra->count > rb->count ? ra : rb);
+	assert(rl != rr);
+
+	env->results.buffer.used = 0;
+	env->dst_tmp.used = 0;
+
+	uint64_t checked[256/64] = { 0 };
+	#if LOG_GROUPING > 2
+	fprintf(stderr, "%s: rl %d, rr %d\n",
+	    __func__,
+	    rl == ra ? result_id_a : result_id_b,
+	    rl == rb ? result_id_b : result_id_a);
+#endif
+
+	size_t rl_i = 0;
+	while (rl_i < rl->count) {
+		uint64_t labels[256/64];
+
+		const struct result_entry *el = &rl->entries[rl_i];
+		uint8_t wu = 0;
+		for (size_t w_i = 0; w_i < 4; w_i++) {
+			labels[w_i] = el->labels[w_i] &~ checked[w_i];
+			if (labels[w_i] != 0) { wu |= ((uint8_t)1 << w_i); }
+		}
+		if (wu == 0) {
+			rl_i++;
+			continue;
+		}
+
+		/* copy all to-states from the left group's entry */
+		{
+			assert(el->to_set_offset + el->to_set_count <= env->to_sets.used);
+			const fsm_state_t *e_to = &env->to_sets.buf[el->to_set_offset];
+			for (size_t i = 0; i < el->to_set_count; i++) {
+				if (!dst_tmp_buf_append(env, e_to[i])) {
+					return 0;
+				}
+			}
+		}
+
+		/* intersect with any overlapping entries on the right group */
+		for (size_t rr_i = 0; rr_i < rr->count; rr_i++) {
+			const struct result_entry *er = &rr->entries[rr_i];
+			assert(er->words_used != 0);
+			if (er->words_used & wu) {
+				int found_any = 0; /* check that wu remains accurate */
+				for (size_t w_i = 0; w_i < 4; w_i++) {
+					if (labels[w_i] & er->labels[w_i]) {
+						found_any = 1;
+						break;
+					}
+				}
+				if (found_any) {
+					for (size_t w_i = 0; w_i < 4; w_i++) {
+						labels[w_i] &= er->labels[w_i];
+						if (labels[w_i] == 0) {
+							wu &=~ ((uint8_t)1 << w_i);
+						}
+					}
+
+					assert(er->to_set_offset + er->to_set_count <= env->to_sets.used);
+					const fsm_state_t *e_to = &env->to_sets.buf[er->to_set_offset];
+					for (size_t i = 0; i < er->to_set_count; i++) {
+						if (!dst_tmp_buf_append(env, e_to[i])) {
+							return 0;
+						}
+					}
+				}
+			}
+		}
+
+		assert(labels[0] || labels[1] || labels[2] || labels[3]);
+		sort_and_dedup_dst_buf(env->dst_tmp.buf, &env->dst_tmp.used);
+
+		if (!add_group_dst_info_to_buffer(env,
+			env->dst_tmp.used, env->dst_tmp.buf,
+			labels)) {
+			return 0;
+		}
+		env->dst_tmp.used = 0;
+
+		for (size_t w_i = 0; w_i < 4; w_i++) {
+			checked[w_i] |= labels[w_i];
+		}
+	}
+
+	/* second pass, emit any unchecked labels in rr */
+	for (size_t rr_i = 0; rr_i < rr->count; rr_i++) {
+		const struct result_entry *er = &rr->entries[rr_i];
+		uint64_t labels[256/64];
+		memcpy(labels, er->labels, sizeof(labels));
+
+		/* check for intersection with remaining unchecked labels */
+		int any_labels_remaining = 0;
+		for (size_t w_i = 0; w_i < 4; w_i++) {
+			/* todo: could negate checked above to avoid ~ here */
+			if (labels[w_i] & ~checked[w_i]) {
+				any_labels_remaining = 1;
+				break;
+			}
+		}
+
+		/* Add those labels and their to-states to the group
+		 * buffer, since rr's entries' labels do not overlap we
+		 * can add it immediately and do not need to update
+		 * checked[]. */
+		if (any_labels_remaining) {
+			for (size_t w_i = 0; w_i < 4; w_i++) {
+				labels[w_i] &=~ checked[w_i];
+			}
+			assert(er->to_set_offset + er->to_set_count <= env->to_sets.used);
+
+			const fsm_state_t *e_to = &env->to_sets.buf[er->to_set_offset];
+
+			for (size_t i = 0; i < er->to_set_count; i++) {
+				if (!dst_tmp_buf_append(env, e_to[i])) {
+					return 0;
+				}
+			}
+
+			if (!add_group_dst_info_to_buffer(env,
+				env->dst_tmp.used, env->dst_tmp.buf,
+				labels)) {
+				return 0;
+			}
+			env->dst_tmp.used = 0;
+		}
+	}
+
+	if (!commit_buffered_result(env, committed_result_id)) {
+		return 0;
+	}
+
+	#if LOG_GROUPING
+	const struct analysis_result *rz = env->results.rs[*committed_result_id];
+	fprintf(stderr, "%s: result, %u entries, committed as %d\n",
+	    __func__, rz->count, *committed_result_id);
+	dump_group(stderr, env, rz);
+	#endif
+
+	TIME(&post);
+	DIFF_MSEC(__func__, pre, post, &env->usec_pair);
+	env->count_pair++;
 
 	return 1;
 }
 
 static int
 analyze_closures__save_output(struct analyze_closures_env *env,
-    const uint64_t labels[256/4], interned_state_set_id iss)
+    const uint64_t labels[256/64], interned_state_set_id iss)
 {
 	if (env->output_count + 1 >= env->output_ceil) {
 		if (!analyze_closures__grow_outputs(env)) {
@@ -1283,37 +2252,12 @@ analyze_closures__save_output(struct analyze_closures_env *env,
 	dst->iss = iss;
 
 #if LOG_AC
-	fprintf(stderr, "ac_save_output: labels [");
+	fprintf(stderr, "%s: output %zu: labels [", __func__, env->output_count);
 	dump_labels(stderr, labels);
-	fprintf(stderr, "] -> iss:%p\n", (void *)iss);
+	fprintf(stderr, "] -> iss:%ld\n", iss);
 #endif
 
 	env->output_count++;
-	return 1;
-}
-
-static int
-analyze_closures__grow_iters(struct analyze_closures_env *env,
-    size_t set_count)
-{
-	size_t nceil = (env->iter_ceil == 0
-	    ? DEF_ITER_CEIL : env->iter_ceil);
-	while (nceil < set_count) {
-		assert(nceil > 0);
-		nceil *= 2;
-	}
-
-#if LOG_AC
-	fprintf(stderr, "ac_init: growing iters to %zu\n", nceil);
-#endif
-
-	struct ac_iter *niters = f_realloc(env->alloc,
-	    env->iters, nceil * sizeof(env->iters[0]));
-	if (niters == NULL) {
-		return 0;
-	}
-	env->iters = niters;
-	env->iter_ceil = nceil;
 	return 1;
 }
 
