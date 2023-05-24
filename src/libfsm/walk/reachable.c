@@ -10,7 +10,6 @@
 #include <fsm/fsm.h>
 
 #include <adt/set.h>
-#include <adt/dlist.h>
 #include <adt/stateset.h>
 #include <adt/edgeset.h>
 
@@ -71,6 +70,20 @@ fsm_reachable(const struct fsm *fsm, fsm_state_t state,
 
 				q[qtop++] = e.state;
 				fsm->states[e.state].visited = 1;
+			}
+		}
+
+		// Handle epsilon edges as well
+		{
+			struct state_iter si;
+			fsm_state_t dst;
+			for (state_set_reset(fsm->states[state].epsilons, &si); state_set_next(&si, &dst); ) {
+				if (fsm->states[dst].visited == 0) {
+					assert(qtop < fsm->statecount);
+
+					q[qtop++] = dst;
+					fsm->states[dst].visited = 1;
+				}
 			}
 		}
 	}

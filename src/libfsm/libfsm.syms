@@ -26,6 +26,9 @@ fsm_hasincoming
 fsm_hasoutgoing
 fsm_hasepsilons
 fsm_hasnondeterminism
+fsm_generate_matches
+fsm_generate_cb_printf
+fsm_generate_cb_printf_escaped
 
 # <fsm/parser.h>
 fsm_parse
@@ -48,6 +51,9 @@ fsm_print_vmasm_amd64_go
 fsm_print_rust
 fsm_print_sh
 fsm_print_go
+fsm_print_vmops_c
+fsm_print_vmops_h
+fsm_print_vmops_main
 
 # <fsm/fsm.h>
 fsm_clone
@@ -60,6 +66,7 @@ fsm_merge
 fsm_addstate
 fsm_addstate_bulk
 fsm_removestate
+fsm_shuffle
 
 fsm_addedge_any
 fsm_addedge_epsilon
@@ -80,6 +87,8 @@ fsm_setend
 fsm_getendidcount
 fsm_getendids
 fsm_setendid
+fsm_mapendids
+fsm_increndids
 
 fsm_countedges
 fsm_countstates
@@ -126,3 +135,5 @@ fsm_capture_set_path
 fsm_capture_rebase_capture_id
 fsm_capture_alloc
 fsm_capture_dump
+
+fsm_minimise_test_oracle

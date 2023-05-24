@@ -34,9 +34,9 @@ fsm_determinise(struct fsm *nfa)
 	map.alloc = nfa->opt->alloc;
 
 	/*
-	 * This NFA->DFA implementation is for Glushkov NFA only; it keeps things
-	 * a little simpler by avoiding epsilon closures here, and also a little
-	 * faster where we can start with a Glushkov NFA in the first place.
+	 * This NFA->DFA implementation is for epsilon-free NFA only. This keeps
+	 * things a little simpler by avoiding epsilon closures, and also a little
+	 * faster where we can start with an epsilon-free NFA in the first place.
 	 */
 	if (fsm_has(nfa, fsm_hasepsilons)) {
 		if (!fsm_remove_epsilons(nfa)) {
@@ -391,12 +391,12 @@ det_copy_capture_actions(struct reverse_mapping *reverse_mappings,
 }
 
 SUPPRESS_EXPECTED_UNSIGNED_INTEGER_OVERFLOW()
-static unsigned long
+static uint64_t
 hash_iss(interned_state_set_id iss)
 {
 	/* Just hashing the ID directly is fine here -- since they're
 	 * interned, they're identified by pointer equality. */
-	return PHI32 * (uintptr_t)iss;
+	return FSM_PHI_64 * (uintptr_t)iss;
 }
 
 static struct mapping *
@@ -428,7 +428,7 @@ map_add(struct map *map,
 	fsm_state_t dfastate, interned_state_set_id iss, struct mapping **new_mapping)
 {
 	size_t i;
-	unsigned long h, mask;
+	uint64_t h, mask;
 
 	if (map->buckets == NULL) {
 		assert(map->count == 0);
@@ -495,7 +495,7 @@ grow_map(struct map *map)
 	}
 
 	for (o_i = 0; o_i < map->count; o_i++) {
-		unsigned long h;
+		uint64_t h;
 		struct mapping *ob = map->buckets[o_i];
 		if (ob == NULL) {
 			continue; /* empty */
@@ -522,7 +522,7 @@ map_find(const struct map *map, interned_state_set_id iss,
 	struct mapping **mapping)
 {
 	size_t i;
-	unsigned long h, mask;
+	uint64_t h, mask;
 
 	if (map->buckets == NULL) {
 		return 0;

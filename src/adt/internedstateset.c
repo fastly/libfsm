@@ -10,10 +10,12 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 #include <fsm/fsm.h>
 
 #include <adt/alloc.h>
+#include <adt/hash.h>
 #include <adt/stateset.h>
 
 #include "common/check.h"
@@ -195,24 +197,13 @@ dump_tables(FILE *f, const struct interned_state_set_pool *pool)
 #endif
 }
 
-/* This will be moved into include/adt/hash.h later. */
-/* 64-bit approximation of the golden ratio. */
-#define FSM_PHI_64 0x9e3779b97f4a7c15UL
-
-SUPPRESS_EXPECTED_UNSIGNED_INTEGER_OVERFLOW()
-static __inline__ uint64_t
-fsm_hash_id(unsigned id)
-{
-	return FSM_PHI_64 * (id + 1);
-}
-
 SUPPRESS_EXPECTED_UNSIGNED_INTEGER_OVERFLOW()
 static uint64_t
 hash_state_ids(size_t count, const fsm_state_t *ids)
 {
 	uint64_t h = 0;
 	for (size_t i = 0; i < count; i++) {
-		h = fsm_hash_id(ids[i]) + (FSM_PHI_64 * h);
+		h = hash_id(ids[i]) + (FSM_PHI_64 * h);
 	}
 	return h;
 }
@@ -263,7 +254,7 @@ grow_htab(struct interned_state_set_pool *pool)
 	pool->htab.bucket_count = ncount;
 
 	if (LOG_ISS) {
-		fprintf(stderr, "%s: %lu -> %lu, max_collisions %zu\n",
+		fprintf(stderr, "%s: %" PRIu64 " -> %" PRIu64 ", max_collisions %zu\n",
 		    __func__, ocount, ncount, max_collisions);
 		dump_tables(stderr, pool);
 	}

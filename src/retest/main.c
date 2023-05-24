@@ -1046,6 +1046,9 @@ process_test_file(const char *fname, enum re_dialect default_dialect, enum imple
 #endif /* DEBUG_TEST_REGEXP */
 
 			ret = fsm_runner_initialize(fsm, &runner, impl, vm_opts);
+
+			fsm_free(fsm);
+
 			if (ret != ERROR_NONE) {
 				fprintf(stderr, "line %d: error compiling %s regexp /%s/%s: %s\n",
 					linenum, dialect_name, regexp, flagdesc, strerror(errno));
@@ -1061,8 +1064,6 @@ process_test_file(const char *fname, enum re_dialect default_dialect, enum imple
 			}
 
 			impl_ready = true;
-
-			fsm_free(fsm);
 		} else if (impl_ready) {
 			int matching;
 			char *orig;
@@ -1220,6 +1221,12 @@ main(int argc, char *argv[])
 					impl = IMPL_VMASM;
 				} else if (strcmp(optarg, "vmc") == 0) {
 					impl = IMPL_VMC;
+				} else if (strcmp(optarg, "vmops") == 0) {
+					impl = IMPL_VMOPS;
+				} else if (strcmp(optarg, "go") == 0) {
+					impl = IMPL_GO;
+				} else if (strcmp(optarg, "goasm") == 0) {
+					impl = IMPL_GOASM;
 				} else {
 					fprintf(stderr, "unknown argument to -l: %s\n", optarg);
 					usage();

@@ -16,18 +16,13 @@
 #include <adt/bitmap.h>
 #include <adt/stateset.h>
 #include <adt/edgeset.h>
+#include <adt/u64bitset.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
 #include <fsm/walk.h>
 #include <fsm/print.h>
 #include <fsm/options.h>
-
-static int
-fprintf_state(FILE *f, const struct fsm *fsm, fsm_state_t s);
-
-static int
-fprintf_state_comments(FILE *f, const struct fsm *fsm, fsm_state_t dst);
 
 /* TODO: centralise */
 static int
@@ -92,7 +87,153 @@ findany(const struct fsm *fsm, fsm_state_t state, fsm_state_t *a)
 	return 1;
 }
 
-void
+static int
+print_state_comments(FILE *f, const struct fsm *fsm, fsm_state_t dst)
+{
+	fsm_state_t start;
+
+	if (!fsm_getstart(fsm, &start)) {
+		return 0;
+	}
+
+	if (dst == start) {
+		fprintf(f, " # start");
+	} else if (!fsm_has(fsm, fsm_hasepsilons)) {
+		char buf[50];
+		int n;
+
+		n = fsm_example(fsm, dst, buf, sizeof buf);
+		if (-1 == n) {
+			return -1;
+		}
+
+		if (n > 0) {
+			fprintf(f, " # e.g. \"");
+			escputs(f, fsm->opt, fsm_escputc, buf);
+			fprintf(f, "%s\"",
+				n >= (int) sizeof buf - 1 ? "..." : "");
+		}
+	}
+
+	return 0;
+}
+
+static void
+print_char_range(FILE *f, const struct fsm_options *opt, char lower, char upper)
+{
+	if (lower == upper) {
+		fprintf(f, "\"");
+		fsm_escputc(f, opt, (char) lower);
+		fprintf(f, "\"");
+	} else {
+		fprintf(f, "\"");
+		fsm_escputc(f, opt, (char) lower);
+		fprintf(f, "\" .. \"");
+		fsm_escputc(f, opt, (char) upper);
+		fprintf(f, "\"");
+	}
+}
+
+static int
+print_state(FILE *f, const struct fsm *fsm, fsm_state_t s)
+{
+	{
+		struct state_iter jt;
+		fsm_state_t st;
+
+		for (state_set_reset(fsm->states[s].epsilons, &jt); state_set_next(&jt, &st); ) {
+			fprintf(f, "%-2u -> %2u;\n", s, st);
+		}
+	}
+
+	{
+		fsm_state_t a;
+
+		if (findany(fsm, s, &a)) {
+			fprintf(f, "%-2u -> %2u ?;\n", s, a);
+			return 0;
+		}
+	}
+
+	assert(s < fsm->statecount);
+	if (fsm->opt->group_edges) {
+		struct edge_group_iter egi;
+		struct edge_group_iter_info info;
+
+		edge_set_group_iter_reset(fsm->states[s].edges,
+		    EDGE_GROUP_ITER_ALL, &egi);
+		while (edge_set_group_iter_next(&egi, &info)) {
+			unsigned i, ranges = 0;
+			unsigned lower = 256; /* start with lower bound out of range */
+			assert(info.to < fsm->statecount);
+
+			fprintf(f, "%-2u -> %2u ", s, info.to);
+
+			for (i = 0; i < 256; i++) {
+				if (u64bitset_get(info.symbols, i)) {
+					if (lower > i) {
+						lower = i; /* set lower bound for range */
+					}
+				} else {
+					if (lower < i) {
+						if (ranges > 0) {
+							fprintf(f, ", ");
+						}
+
+						print_char_range(f, fsm->opt, (char) lower, (char) i - 1);
+						ranges++;
+					}
+					lower = 256;
+				}
+			}
+			if (lower < 256) { /* close last range */
+				if (ranges > 0) {
+					fprintf(f, ", ");
+				}
+
+				print_char_range(f, fsm->opt, (char) lower, (char) 255);
+			}
+
+			fprintf(f, ";");
+
+			if (fsm->opt->comments) {
+				if (-1 == print_state_comments(f, fsm, info.to)) {
+					return -1;
+				}
+			}
+
+			fprintf(f, "\n");
+		}
+	} else {
+		struct fsm_edge e;
+		struct edge_ordered_iter eoi;
+
+		for (edge_set_ordered_iter_reset(fsm->states[s].edges, &eoi);
+		     edge_set_ordered_iter_next(&eoi, &e); ) {
+			assert(e.state < fsm->statecount);
+
+			fprintf(f, "%-2u -> %2u", s, e.state);
+
+			fprintf(f, " \"");
+			fsm_escputc(f, fsm->opt, (char) e.symbol);
+			putc('\"', f);
+
+			fprintf(f, ";");
+
+			if (fsm->opt->comments) {
+				if (-1 == print_state_comments(f, fsm, e.state)) {
+					return -1;
+				}
+			}
+
+			fprintf(f, "\n");
+		}
+	}
+
+	return 0;
+}
+
+int
 fsm_print_fsm(FILE *f, const struct fsm *fsm)
 {
 	fsm_state_t s, start;
@@ -116,15 +257,15 @@ fsm_print_fsm(FILE *f, const struct fsm *fsm)
 	}
 
 	for (s = 0; s < fsm->statecount; s++) {
-		if (!fprintf_state(f, fsm, s)) {
-			return;
+		if (-1 == print_state(f, fsm, s)) {
+			return -1;
 		}
 	}
 
 	fprintf(f, "\n");
 
 	if (!fsm_getstart(fsm, &start)) {
-		return;
+		goto done;
 	}
 
 	fprintf(f, "start: %u;\n", start);
@@ -132,7 +273,7 @@ fsm_print_fsm(FILE *f, const struct fsm *fsm)
 	end = fsm->endcount;
 
 	if (end == 0) {
-		return;
+		goto done;
 	}
 
 	fprintf(f, "end:   ");
@@ -143,146 +284,13 @@ fsm_print_fsm(FILE *f, const struct fsm *fsm)
 			fprintf(f, "%u%s", s, end > 0 ? ", " : ";\n");
 		}
 	}
+
+done:
+
+	if (ferror(f)) {
+		return -1;
+	}
+
+	return 0;
 }
 
-static void
-fprintf_char_range(FILE *f, const struct fsm_options *opt, char lower, char upper)
-{
-	if (lower == upper) {
-		fputs("\"", f);
-		fsm_escputc(f, opt, (char)lower);
-		fputs("\"", f);
-	} else {
-		fputs("\"", f);
-		fsm_escputc(f, opt, (char)lower);
-		fputs("\" .. \"", f);
-		fsm_escputc(f, opt, (char)upper);
-		fputs("\"", f);
-	}
-}
-
-static int
-fprintf_state(FILE *f, const struct fsm *fsm, fsm_state_t s)
-{
-	{
-		struct state_iter jt;
-		fsm_state_t st;
-
-		for (state_set_reset(fsm->states[s].epsilons, &jt); state_set_next(&jt, &st); ) {
-			fprintf(f, "%-2u -> %2u;\n", s, st);
-		}
-	}
-
-	{
-		fsm_state_t a;
-
-		if (findany(fsm, s, &a)) {
-			fprintf(f, "%-2u -> %2u ?;\n", s, a);
-			return 1;
-		}
-	}
-
-	assert(s < fsm->statecount);
-	if (fsm->opt->group_edges) {
-		struct edge_group_iter egi;
-		struct edge_group_iter_info info;
-
-		edge_set_group_iter_reset(fsm->states[s].edges,
-		    EDGE_GROUP_ITER_ALL, &egi);
-		while (edge_set_group_iter_next(&egi, &info)) {
-			unsigned i, ranges = 0;
-			unsigned lower = 256; /* start with lower bound out of range */
-			assert(info.to < fsm->statecount);
-
-			fprintf(f, "%-2u -> %2u ", s, info.to);
-
-			for (i = 0; i < 256; i++) {
-				if (info.symbols[i/64] & (1UL << (i & 63))) {
-					if (lower > i) {
-						lower = i; /* set lower bound for range */
-					}
-				} else {
-					if (lower < i) {
-						if (ranges > 0) {
-							fputs(", ", f);
-						}
-
-						fprintf_char_range(f, fsm->opt, lower, (char)i - 1);
-						ranges++;
-					}
-					lower = 256;
-				}
-			}
-			if (lower < 256) { /* close last range */
-				if (ranges > 0) {
-					fputs(", ", f);
-				}
-				fprintf_char_range(f, fsm->opt, lower, (char)255);
-			}
-
-			fprintf(f, ";");
-
-			if (fsm->opt->comments) {
-				if (!fprintf_state_comments(f, fsm, info.to)) {
-					return 0;
-				}
-			}
-
-			fprintf(f, "\n");
-		}
-	} else {
-		struct fsm_edge e;
-		struct edge_ordered_iter eoi;
-		for (edge_set_ordered_iter_reset(fsm->states[s].edges, &eoi);
-		     edge_set_ordered_iter_next(&eoi, &e); ) {
-			assert(e.state < fsm->statecount);
-
-			fprintf(f, "%-2u -> %2u", s, e.state);
-
-			fputs(" \"", f);
-			fsm_escputc(f, fsm->opt, (char)e.symbol);
-			putc('\"', f);
-
-			fprintf(f, ";");
-
-			if (fsm->opt->comments) {
-				if (!fprintf_state_comments(f, fsm, e.state)) {
-					return 0;
-				}
-			}
-
-			fprintf(f, "\n");
-		}
-	}
-
-	return 1;
-}
-
-static int
-fprintf_state_comments(FILE *f, const struct fsm *fsm, fsm_state_t dst)
-{
-	fsm_state_t start;
-
-	if (fsm_getstart(fsm, &start)) {
-		if (dst == start) {
-			fprintf(f, " # start");
-		} else if (!fsm_has(fsm, fsm_hasepsilons)) {
-			char buf[50];
-			int n;
-
-			n = fsm_example(fsm, dst, buf, sizeof buf);
-			if (-1 == n) {
-				perror("fsm_example");
-				return 0;
-			}
-
-			if (n > 0) {
-				fprintf(f, " # e.g. \"");
-				escputs(f, fsm->opt, fsm_escputc, buf);
-				fprintf(f, "%s\"",
-				    n >= (int) sizeof buf - 1 ? "..." : "");
-			}
-		}
-	}
-	return 1;
-}

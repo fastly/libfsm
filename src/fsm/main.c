@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <time.h>
 
 #include <fsm/fsm.h>
@@ -109,6 +110,7 @@ usage(void)
 	printf("       fsm {-p} [-l <language>] [-aCcEgwX] [-k <io>] [-e <prefix>]\n");
 	printf("       fsm {-dmr | -t <transformation>} [-i <iterations>] [<file.fsm> | <file-a> <file-b>]\n");
 	printf("       fsm {-q <query>} [<file>]\n");
+	printf("       fsm {-G <max_length>} [<file>]\n");
 	printf("       fsm {-W <maxlen>} <file.fsm>\n");
 	printf("       fsm -h\n");
 }
@@ -259,32 +261,29 @@ op_name(const char *name)
 		const char *name;
 		enum op op;
 	} a[] = {
-		{ "complete",    OP_COMPLETE    },
+		{ "complete",        OP_COMPLETE    },
 
-		{ "complement",  OP_COMPLEMENT  },
-		{ "invert",      OP_COMPLEMENT  },
-		{ "reverse",     OP_REVERSE     },
-		{ "rev",         OP_REVERSE     },
-		{ "determinise", OP_DETERMINISE },
-		{ "dfa",         OP_DETERMINISE },
-		{ "todfa",       OP_DETERMINISE },
-		{ "glush",       OP_RM_EPSILONS },
-		{ "glushovize",  OP_RM_EPSILONS },
-		{ "min",         OP_MINIMISE    },
-		{ "minimise",    OP_MINIMISE    },
-		{ "trim",        OP_TRIM        },
-		{ "glushkovise", OP_RM_EPSILONS },
+		{ "complement",      OP_COMPLEMENT  },
+		{ "invert",          OP_COMPLEMENT  },
+		{ "reverse",         OP_REVERSE     },
+		{ "rev",             OP_REVERSE     },
+		{ "determinise",     OP_DETERMINISE },
+		{ "dfa",             OP_DETERMINISE },
+		{ "todfa",           OP_DETERMINISE },
+		{ "min",             OP_MINIMISE    },
+		{ "minimise",        OP_MINIMISE    },
+		{ "trim",            OP_TRIM        },
 		{ "remove_epsilons", OP_RM_EPSILONS },
 
-		{ "cat",         OP_CONCAT      },
-		{ "concat",      OP_CONCAT      },
-		{ "union",       OP_UNION       },
-		{ "intersect",   OP_INTERSECT   },
-		{ "subtract",    OP_SUBTRACT    },
-		{ "sub",         OP_SUBTRACT    },
-		{ "minus",       OP_SUBTRACT    },
-		{ "equals",      OP_EQUAL       },
-		{ "equal",       OP_EQUAL       }
+		{ "cat",             OP_CONCAT      },
+		{ "concat",          OP_CONCAT      },
+		{ "union",           OP_UNION       },
+		{ "intersect",       OP_INTERSECT   },
+		{ "subtract",        OP_SUBTRACT    },
+		{ "sub",             OP_SUBTRACT    },
+		{ "minus",           OP_SUBTRACT    },
+		{ "equals",          OP_EQUAL       },
+		{ "equal",           OP_EQUAL       }
 	};
 
 	assert(name != NULL);
@@ -372,6 +371,7 @@ main(int argc, char *argv[])
 	struct fsm *fsm;
 	int xfiles;
 	int r;
+	size_t generate_bounds = 0;
 
 	int (*query)(const struct fsm *, fsm_state_t);
 	int (*walk )(const struct fsm *,
@@ -395,11 +395,11 @@ main(int argc, char *argv[])
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "aCcgwXEe:k:i:" "xpq:l:dGmrt:W:"), c != -1) {
+		while (c = getopt(argc, argv, "h" "aCcgwXe:k:i:" "xpq:l:dG:mrt:EW:"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 1;          break;
 			case 'c': opt.consolidate_edges = 1;          break;
-			case 'C': opt.comments		= 0;          break;
+			case 'C': opt.comments          = 0;          break;
 			case 'g': opt.group_edges       = 1;          break;
 			case 'w': opt.fragment          = 1;          break;
 			case 'X': opt.always_hex        = 1;          break;
@@ -420,7 +420,6 @@ main(int argc, char *argv[])
 			case 'm': op = op_name("minimise");           break;
 			case 'r': op = op_name("reverse");            break;
 			case 't': op = op_name(optarg);               break;
-			case 'G': op = op_name("glushkovise");        break;
 			case 'E': op = op_name("remove_epsilons");    break;
 			case 'W':
 				/* print = gen_words; */
@@ -428,6 +427,13 @@ main(int argc, char *argv[])
 				/* XXX: error handling */
 				fprintf(stderr, "not yet implemented.\n");
 				exit(EXIT_FAILURE);
+				break;
+			case 'G':
+				generate_bounds = strtoul(optarg, NULL, 10);
+				if (generate_bounds == 0) {
+					usage();
+					exit(EXIT_FAILURE);
+				}
 				break;
 
 			case 'h':
@@ -662,7 +668,18 @@ main(int argc, char *argv[])
 	}
 
 	if (print != NULL) {
-		print(stdout, fsm);
+		if (-1 == print(stdout, fsm)) {
+			if (errno == ENOTSUP) {
+				fprintf(stderr, "unsupported IO API\n");
+			} else {
+				perror("print_fsm");
+			}
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	if (generate_bounds > 0) {
+		r = fsm_generate_matches(fsm, generate_bounds, fsm_generate_cb_printf_escaped, &opt);
 	}
 
 	fsm_free(fsm);

@@ -17,6 +17,7 @@
 	<!ENTITY file.arg    "<replaceable>file</replaceable>">
 	<!ENTITY dialect.arg "<replaceable>dialect</replaceable>">
 	<!ENTITY prefix.arg  "<replaceable>prefix</replaceable>">
+	<!ENTITY length.arg  "<replaceable>length</replaceable>">
 	<!ENTITY group.arg   "<replaceable>group</replaceable>">
 	<!ENTITY query.arg   "<replaceable>query</replaceable>">
 
@@ -27,9 +28,12 @@
 	<!ENTITY a.opt "<option>-a</option>">
 	<!ENTITY b.opt "<option>-b</option>">
 	<!ENTITY c.opt "<option>-c</option>">
+	<!ENTITY C.opt "<option>-C</option>">
 	<!ENTITY w.opt "<option>-w</option>">
 	<!ENTITY X.opt "<option>-X</option>">
 	<!ENTITY e.opt "<option>-e</option>&nbsp;&prefix.arg;">
+	<!ENTITY E.opt "<option>-E</option>&nbsp;&prefix.arg;">
+	<!ENTITY G.opt "<option>-G</option>&nbsp;&length.arg;">
 
 	<!ENTITY a.opt "<option>-a</option>">
 	<!ENTITY d.opt "<option>-d</option>">
@@ -247,6 +251,15 @@ group (for dialects which have them) (rather than a "whole" regexp)
 			</varlistentry>
 
 			<varlistentry>
+				<term>&C.opt;</term>
+
+				<listitem>
+					<para>Disable comments in generated code,
+						per the <code>comments</code> option for &fsm_print.3;.</para>
+				</listitem>
+			</varlistentry>
+
+			<varlistentry>
 				<term>&w.opt;</term>
 
 				<listitem>
@@ -273,6 +286,24 @@ group (for dialects which have them) (rather than a "whole" regexp)
 					<para>Set a prefix for output,
 						per the <code>prefix</code> option for &fsm_print.3;.
 						The default is to output with no prefix.</para>
+				</listitem>
+			</varlistentry>
+
+			<varlistentry>
+				<term>&E.opt;</term>
+
+				<listitem>
+					<para>Set a package prefix for output,
+						per the <code>package_prefix</code> option for &fsm_print.3;.
+						The default is to output with the value of <code>prefix.</code></para>
+				</listitem>
+			</varlistentry>
+
+			<varlistentry>
+				<term>&G.opt;</term>
+
+				<listitem>
+					<para>Print example matching inputs up to a maximum length.</para>
 				</listitem>
 			</varlistentry>
 

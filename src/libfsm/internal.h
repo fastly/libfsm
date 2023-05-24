@@ -48,9 +48,6 @@ struct state_array;
 
 #define FSM_CAPTURE_MAX INT_MAX
 
-/* 32-bit approximation of golden ratio, used for hashing */
-#define PHI32 0x9e3779b9
-
 #ifndef TRACK_TIMES
 #define TRACK_TIMES 0
 #endif
@@ -153,14 +150,6 @@ struct fsm {
 	const struct fsm_options *opt;
 };
 
-void
-fsm_carryopaque_array(const struct fsm *src_fsm, const fsm_state_t *src_set, size_t n,
-    struct fsm *dst_fsm, fsm_state_t dst_state);
-
-void
-fsm_carryopaque(const struct fsm *fsm, const struct state_set *set,
-	struct fsm *new, fsm_state_t state);
-
 struct fsm *
 fsm_mergeab(struct fsm *a, struct fsm *b,
     fsm_state_t *base_b);
@@ -174,15 +163,6 @@ state_hasnondeterminism(const struct fsm *fsm, fsm_state_t state, struct bm *bm)
  */
 struct state_set **
 epsilon_closure(struct fsm *fsm);
-
-int
-symbol_closure_without_epsilons(const struct fsm *fsm, fsm_state_t s,
-	struct state_set *sclosures[]);
-
-int
-symbol_closure(const struct fsm *fsm, fsm_state_t s,
-	struct state_set * const eclosures[],
-	struct state_set *sclosures[]);
 
 void
 closure_free(struct state_set **closures, size_t n);
@@ -220,7 +200,7 @@ f_realloc(const struct fsm_alloc *a, void *p, size_t sz);
 /* Take a source fsm and a state mapping, produce a new
  * fsm where states may be consolidated. */
 struct fsm *
-fsm_consolidate(struct fsm *src,
+fsm_consolidate(const struct fsm *src,
     const fsm_state_t *mapping, size_t mapping_count);
 
 #endif

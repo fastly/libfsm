@@ -139,7 +139,7 @@ jobs:
         os: [ ubuntu ]
         cc: [ clang, gcc ]
         make: [ bmake ] # we test makefiles separately
-        debug: [ DEBUG, RELEASE ] # RELEASE=1 is a no-op
+        debug: [ DEBUG, EXPENSIVE_CHECKS, RELEASE ] # RELEASE=1 is a no-op
         exclude:
           - os: macos
             cc: gcc # it's clang anyway
@@ -266,7 +266,7 @@ jobs:
         os: [ ubuntu ]
         cc: [ clang, gcc ]
         make: [ bmake ]
-        debug: [ DEBUG, RELEASE ] # RELEASE=1 is a no-op
+        debug: [ DEBUG, EXPENSIVE_CHECKS, RELEASE ] # RELEASE=1 is a no-op
         exclude:
           - os: macos
             cc: gcc # it's clang anyway
@@ -327,8 +327,8 @@ jobs:
         os: [ ubuntu ]
         cc: [ clang, gcc ]
         make: [ bmake ]
-        debug: [ DEBUG, RELEASE ] # RELEASE=1 is a no-op
-        lang: [ "vm -x v1", "vm -x v2", asm, c, vmc ]
+        debug: [ DEBUG, EXPENSIVE_CHECKS, RELEASE ] # RELEASE=1 is a no-op
+        lang: [ "vm -x v1", "vm -x v2", asm, c, vmc, vmops, go, goasm ]
         exclude:
           - os: macos
             cc: gcc # it's clang anyway
@@ -352,6 +352,13 @@ jobs:
         brew update
         ${{ matrix.cc }} --version
 
+    - name: Dependencies (Ubuntu/Go)
+      if: matrix.os == 'ubuntu' && (matrix.lang == 'go' || matrix.lang == 'goasm')
+      run: |
+        uname -a
+        sudo apt-get install golang
+        go version
+
     - name: Fetch build
       uses: actions/cache@v3
       id: cache-build
@@ -367,7 +374,7 @@ jobs:
         key: cvtpcre-bmake-ubuntu-gcc-DEBUG-ASAN-${{ github.sha }}-${{ env.pcre2 }}
 
     - name: Run PCRE suite (${{ matrix.lang }})
-      run: ./${{ env.build }}/bin/retest -O1 -l ${{ matrix.lang }} ${{ env.cvtpcre }}/*.tst
+      run: CC=${{ matrix.cc }} ./${{ env.build }}/bin/retest -O1 -l ${{ matrix.lang }} ${{ env.cvtpcre }}/*.tst
 
   docs:
     name: Documentation
@@ -389,6 +396,7 @@ jobs:
       if: steps.cache-docs.outputs.cache-hit != 'true'
       run: |
         uname -a
+        sudo apt-get update
         sudo apt-get install bmake libxml2-utils xsltproc docbook-xml docbook-xsl
 
     - name: Fetch checkout
@@ -530,7 +538,7 @@ jobs:
         printf "package_file=%s\n" $(basename pkg/*) >> $GITHUB_ENV
 
     - name: Upload
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: ${{ env.package_file }}
         path: pkg/${{ env.package_file }}

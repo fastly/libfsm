@@ -87,20 +87,24 @@ print_cond(FILE *f, const struct dfavm_op_ir *op, const struct fsm_options *opt)
 	fprintf(f, " ");
 }
 
-static void
+static int
 print_end(FILE *f, const struct dfavm_op_ir *op, const struct fsm_options *opt,
 	enum dfavm_op_end end_bits, const struct ir *ir)
 {
 	if (end_bits == VM_END_FAIL) {
 		fprintf(f, "return None");
-		return;
+		return 0;
 	}
 
 	if (opt->endleaf != NULL) {
-		opt->endleaf(f, op->ir_state->end_ids, opt->endleaf_opaque);
+		if (-1 == opt->endleaf(f, op->ir_state->end_ids, opt->endleaf_opaque)) {
+			return -1;
+		}
 	} else {
 		fprintf(f, "return Some(%td)", op->ir_state - ir->states);
 	}
+
+	return 0;
 }
 
 static void
@@ -173,6 +177,33 @@ fsm_print_rustfrag(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 		}
 	}
 
+	/*
+	 * Only declare variables if we're actually going to use them.
+	 */
+	if (a.linked->cmp == VM_CMP_ALWAYS && a.linked->instr == VM_OP_STOP) {
+		assert(a.linked->next == NULL);
+		fprintf(f, "\n");
+	} else {
+		switch (opt->io) {
+		case FSM_IO_GETC:
+			break;
+
+		case FSM_IO_STR:
+			fprintf(f, "    let mut bytes = input.bytes();\n");
+			fprintf(f, "\n");
+			break;
+
+		case FSM_IO_PAIR:
+			fprintf(f, "    let mut bytes = input.iter();\n");
+			fprintf(f, "\n");
+			break;
+
+		default:
+			assert(!"unreached");
+			break;
+		}
+	}
+
 	fprintf(f, "    pub enum Label {\n       ");
 	for (op = a.linked; op != NULL; op = op->next) {
 		if (op == a.linked || op->num_incoming > 0) {
@@ -230,7 +261,9 @@ fsm_print_rustfrag(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 			if (op->cmp != VM_CMP_ALWAYS) {
 				fprintf(f, "{ ");
 			}
-			print_end(f, op, opt, op->u.stop.end_bits, ir);
+			if (-1 == print_end(f, op, opt, op->u.stop.end_bits, ir)) {
+				return -1;
+			}
 			fprintf(f, ";");
 			if (op->cmp != VM_CMP_ALWAYS) {
 				fprintf(f, " }");
@@ -323,7 +356,7 @@ fsm_print_rustfrag(FILE *f, const struct ir *ir, const struct fsm_options *opt,
 	return 0;
 }
 
-void
+static int
 fsm_print_rust_complete(FILE *f, const struct ir *ir,
 	const struct fsm_options *opt, const char *prefix, const char *cp)
 {
@@ -334,7 +367,7 @@ fsm_print_rust_complete(FILE *f, const struct ir *ir,
 	if (opt->fragment) {
 		fsm_print_rustfrag(f, ir, opt, cp,
 			opt->leaf != NULL ? opt->leaf : leaf, opt->leaf_opaque);
-		return;
+		return -1;
 	}
 
 	fprintf(f, "\n");
@@ -352,21 +385,17 @@ fsm_print_rust_complete(FILE *f, const struct ir *ir,
 		/* e.g. dbg!(fsm_main("xabces")); */
 		fprintf(f, "(input: &str) -> Option<usize> {\n");
 		fprintf(f, "    use Label::*;\n");
-		fprintf(f, "    let mut bytes = input.bytes();\n");
-		fprintf(f, "\n");
 		break;
 
 	case FSM_IO_PAIR:
 		/* e.g. dbg!(fsm_main("xabces".as_bytes())); */
 		fprintf(f, "(input: &[u8]) -> Option<usize> {\n");
 		fprintf(f, "    use Label::*;\n");
-		fprintf(f, "    let mut bytes = input.iter();\n");
-		fprintf(f, "\n");
 		break;
 
 	default:
 		fprintf(stderr, "unsupported IO API\n");
-		break;
+		exit(EXIT_FAILURE);
 	}
 
 	fsm_print_rustfrag(f, ir, opt, cp,
@@ -375,14 +404,20 @@ fsm_print_rust_complete(FILE *f, const struct ir *ir,
 	fprintf(f, "}\n");
 	fprintf(f, "\n");
 
+	if (ferror(f)) {
+		return -1;
+	}
+
+	return 0;
 }
 
-void
+int
 fsm_print_rust(FILE *f, const struct fsm *fsm)
 {
 	struct ir *ir;
 	const char *prefix;
 	const char *cp;
+	int r;
 
 	assert(f != NULL);
 	assert(fsm != NULL);
@@ -390,7 +425,7 @@ fsm_print_rust(FILE *f, const struct fsm *fsm)
 
 	ir = make_ir(fsm);
 	if (ir == NULL) {
-		return;
+		return -1;
 	}
 
 	if (fsm->opt->prefix != NULL) {
@@ -405,8 +440,10 @@ fsm_print_rust(FILE *f, const struct fsm *fsm)
 		cp = "c"; /* XXX */
 	}
 
-	fsm_print_rust_complete(f, ir, fsm->opt, prefix, cp);
+	r = fsm_print_rust_complete(f, ir, fsm->opt, prefix, cp);
 
 	free_ir(fsm, ir);
+
+	return r;
 }
 

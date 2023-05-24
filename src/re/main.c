@@ -23,6 +23,7 @@
 #include <fsm/options.h>
 #include <fsm/parser.h>
 #include <fsm/vm.h>
+#include <fsm/walk.h>
 
 #include <re/re.h>
 #include <re/literal.h>
@@ -62,6 +63,7 @@ usage(void)
 	fprintf(stderr, "       re    [-r <dialect>] [-nbiusfyz] {-q <query>} <re> ...\n");
 	fprintf(stderr, "       re -p [-r <dialect>] [-nbiusfyz] [-l <language>] [-acwX] [-k <io>] [-e <prefix>] <re> ...\n");
 	fprintf(stderr, "       re -m [-r <dialect>] [-nbiusfyz] <re> ...\n");
+	fprintf(stderr, "       re -G <max_length> [-r <dialect>] [-biu] <re>\n");
 	fprintf(stderr, "       re -h\n");
 }
 
@@ -122,6 +124,10 @@ print_name(const char *name,
 		{ "rust",   fsm_print_rust,   NULL },
 		{ "sh",     fsm_print_sh,     NULL },
 		{ "go",     fsm_print_go,     NULL },
+
+		{ "vmops_c",    fsm_print_vmops_c,    NULL },
+		{ "vmops_h",    fsm_print_vmops_h,    NULL },
+		{ "vmops_main", fsm_print_vmops_main, NULL },
 
 		{ "amd64",      fsm_print_vmasm,            NULL },
 		{ "amd64_att",  fsm_print_vmasm_amd64_att,  NULL },
@@ -636,6 +642,7 @@ main(int argc, char *argv[])
 	int patterns;
 	int ambig;
 	int makevm;
+	size_t generate_bounds = 0;
 
 	struct fsm_dfavm *vm;
 
@@ -668,13 +675,15 @@ main(int argc, char *argv[])
 	{
 		int c;
 
-		while (c = getopt(argc, argv, "h" "acwXe:k:" "bi" "sq:r:l:F:" "upMmnftxyz"), c != -1) {
+		while (c = getopt(argc, argv, "h" "acCwXe:E:G:k:" "bi" "sq:r:l:F:" "upMmnftxyz"), c != -1) {
 			switch (c) {
 			case 'a': opt.anonymous_states  = 0;          break;
 			case 'c': opt.consolidate_edges = 0;          break;
+			case 'C': opt.comments          = 0;          break;
 			case 'w': opt.fragment          = 1;          break;
 			case 'X': opt.always_hex        = 1;          break;
 			case 'e': opt.prefix            = optarg;     break;
+			case 'E': opt.package_prefix	= optarg;     break;
 			case 'k': opt.io                = io(optarg); break;
 
 			case 'b': flags |= RE_ANCHORED; break;
@@ -705,6 +714,14 @@ main(int argc, char *argv[])
 			case 't': isliteral = 1; break;
 			case 'z': patterns  = 1; break;
 			case 'M': makevm    = 1; break;
+
+			case 'G':
+				generate_bounds = strtoul(optarg, NULL, 10);
+				if (generate_bounds == 0) {
+					usage();
+					exit(EXIT_FAILURE);
+				}
+				break;
 
 			case 'h':
 				usage();
@@ -743,6 +760,11 @@ main(int argc, char *argv[])
 
 	if (patterns && !!query) {
 		fprintf(stderr, "-z does not apply for querying\n");
+		return EXIT_FAILURE;
+	}
+
+	if (generate_bounds > 0 && (keep_nfa || example || isliteral || query)) {
+		fprintf(stderr, "-G cannot be used with -m, -n, -q, or -t\n");
 		return EXIT_FAILURE;
 	}
 
@@ -805,7 +827,7 @@ main(int argc, char *argv[])
 				 yfiles ? argv[0] : NULL,
 				!yfiles ? argv[0] : NULL);
 
-			if (err.e == RE_EXUNSUPPORTD) {
+			if (err.e == RE_EUNSUPPORTED) {
 				return 2;
 			}
 
@@ -893,7 +915,7 @@ main(int argc, char *argv[])
 				 yfiles ? argv[0] : NULL,
 				!yfiles ? argv[0] : NULL);
 
-			if (err.e == RE_EXUNSUPPORTD) {
+			if (err.e == RE_EUNSUPPORTED) {
 				return 2;
 			}
 
@@ -962,7 +984,7 @@ main(int argc, char *argv[])
 					 yfiles ? argv[i] : NULL,
 					!yfiles ? argv[i] : NULL);
 
-				if (err.e == RE_EXUNSUPPORTD) {
+				if (err.e == RE_EUNSUPPORTED) {
 					return 2;
 				}
 
@@ -1160,6 +1182,10 @@ main(int argc, char *argv[])
 		return 0;
 	}
 
+	if (generate_bounds > 0) {
+		return fsm_generate_matches(fsm, generate_bounds, fsm_generate_cb_printf_escaped, &opt);
+	}
+
 	if (print_fsm != NULL) {
 		/* TODO: print examples in comments for end states;
 		 * patterns in comments for the whole FSM */
@@ -1174,7 +1200,14 @@ main(int argc, char *argv[])
 			opt.endleaf = patterns ? endleaf_json : NULL;
 		}
 
-		print_fsm(stdout, fsm);
+		if (-1 == print_fsm(stdout, fsm)) {
+			if (errno == ENOTSUP) {
+				fprintf(stderr, "unsupported IO API\n");
+			} else {
+				perror("print_fsm");
+			}
+			exit(EXIT_FAILURE);
+		}
 
 /* XXX: free fsm */
 

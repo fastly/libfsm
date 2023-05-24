@@ -1,6 +1,11 @@
 .MAKEFLAGS: -r -m $(.CURDIR)/share/mk
 .MAKE.JOB.PREFIX=
 
+.MAIN: all
+
+.SYSPATH:
+.SYSPATH: $(.CURDIR)/share/mk
+
 .if defined(unix)
 BUILD_IMPOSSIBLE="attempting to use sys.mk"
 .endif
@@ -86,11 +91,14 @@ SUBDIR += src/lx
 SUBDIR += src
 SUBDIR += tests/capture
 SUBDIR += tests/complement
+SUBDIR += tests/gen
 SUBDIR += tests/intersect
 #SUBDIR += tests/ir # XXX: fragile due to state numbering
 SUBDIR += tests/eclosure
+SUBDIR += tests/equals
 SUBDIR += tests/subtract
 SUBDIR += tests/determinise
+SUBDIR += tests/endids
 SUBDIR += tests/epsilons
 SUBDIR += tests/glob
 SUBDIR += tests/like
@@ -113,7 +121,6 @@ SUBDIR += tests/set
 SUBDIR += tests/stateset
 SUBDIR += tests/internedstateset
 SUBDIR += tests/sql
-SUBDIR += tests/hashset
 SUBDIR += tests/queue
 SUBDIR += tests/aho_corasick
 SUBDIR += tests/retest

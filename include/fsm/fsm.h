@@ -33,6 +33,8 @@ typedef unsigned int fsm_state_t;
  * original FSM(s) matched when executing a combined FSM. */
 typedef unsigned int fsm_end_id_t;
 
+#define FSM_END_ID_MAX UINT_MAX
+
 /* struct used to return a collection of end IDs. */
 struct fsm_end_ids {
 	unsigned count;
@@ -199,6 +201,8 @@ fsm_setend(struct fsm *fsm, fsm_state_t state, int end);
  * - union
  * - concat
  * - ...
+ *
+ * Returns 1 on success, 0 on error.
  * */
 int
 fsm_setendid(struct fsm *fsm, fsm_end_id_t id);
@@ -224,6 +228,49 @@ fsm_getendids(const struct fsm *fsm, fsm_state_t end_state,
 /* Get the number of end IDs associated with an end state. */
 size_t
 fsm_getendidcount(const struct fsm *fsm, fsm_state_t end_state);
+
+/* Callback function to remap the end ids of a state.  This function can
+ * remap to fewer end ids, but cannot add additional end ids, and cannot
+ * remove all end ids from a state.
+ *
+ * Arguments:
+ *   state         The fsm state.  This will be an end state, and will have
+ *                 at least one endid.
+ *   num_ids       The number of end ids.
+ *   endids        An array of end ids
+ *   num_written   The number of end ids after remap() returns.  This must
+ *                 be in the range: 0 < *num_written <= num_ids.
+ *   opaque        opaque user-defined data passed to remap()
+ *
+ * Return value
+ *   0             indicates that the remapping should stop
+ *   non-zero      remapping should continue
+ */
+typedef int
+fsm_endid_remap_fun(fsm_state_t state, size_t num_ids,
+	fsm_end_id_t *endids, size_t *num_written, void *opaque);
+
+/* Remaps all end states with endids.  remap function is called for any
+ * state with endids.  See the fsm_endid_remap_fun typedef for the
+ * requirements of this function.
+ *
+ * Arguments
+ *   fsm          The fsm being remapped
+ *   remap        The function called to remap end ids
+ *   opaque       The opaque user defined data passed to the remap function
+ *
+ * Return value
+ *   0            remapping stopped by the remap function returning 0
+ *   1            remapping finished without stopping
+ */
+int
+fsm_mapendids(struct fsm * fsm, fsm_endid_remap_fun remap, void *opaque);
+
+/* Remaps endids by adding a constant delta to them.  Note that this will wrap around as an unsigned integer,
+ * with the max value given by FSM_END_ID_MAX.
+ */
+void
+fsm_increndids(struct fsm * fsm, int delta);
 
 /*
  * Find the state (if there is just one), or add epsilon edges from all states,
@@ -313,7 +360,7 @@ fsm_trim(struct fsm *fsm, enum fsm_trim_mode mode,
 /*
  * Produce a short legible string that matches up to a goal state.
  *
- * The given FSM is expected to be a Glushkov NFA.
+ * The given FSM is expected to be an epsilon-free NFA.
  */
 int
 fsm_example(const struct fsm *fsm, fsm_state_t goal,
@@ -328,8 +375,8 @@ int
 fsm_reverse(struct fsm *fsm);
 
 /*
- * Convert an NFA with epsilon transitions to a Glushkov NFA (NFA without
- * epsilon transitions).
+ * Convert an NFA with epsilon transitions to an NFA without
+ * epsilon transitions.
  *
  * Returns false on error; see errno.
  */
@@ -388,7 +435,7 @@ fsm_equal(const struct fsm *a, const struct fsm *b);
  * reachable, then the path returned will be non-NULL but will not contain
  * the goal state.
  *
- * The given FSM is expected to be a Glushkov NFA.
+ * The given FSM is expected to be an epsilon-free NFA.
  */
 struct path *
 fsm_shortest(const struct fsm *fsm,
@@ -435,6 +482,10 @@ fsm_exec(const struct fsm *fsm, int (*fsm_getc)(void *opaque), void *opaque,
  */
 int fsm_sgetc(void *opaque); /* expects opaque to be char ** */
 int fsm_fgetc(void *opaque); /* expects opaque to be FILE *  */
+
+/* Shuffle the state IDs in the FSM. This is mainly useful for testing. */
+int
+fsm_shuffle(struct fsm *fsm, unsigned seed);
 
 #endif
 

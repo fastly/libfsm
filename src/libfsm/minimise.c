@@ -18,23 +18,21 @@
 #include <fsm/alloc.h>
 
 #include <adt/edgeset.h>
+#include <adt/pv.h>
 #include <adt/set.h>
 #include <adt/u64bitset.h>
 
 #include "internal.h"
+#include "capture.h"
 
 #define LOG_MAPPINGS 0
 #define LOG_STEPS 0
-#define LOG_TIME 0
 #define LOG_INIT 0
 #define LOG_ECS 0
 #define LOG_PARTITIONS 0
 
-#if LOG_TIME
-#include <sys/time.h>
-#endif
-
 #include "minimise_internal.h"
+#include "minimise_test_oracle.h"
 
 int
 fsm_minimise(struct fsm *fsm)
@@ -47,18 +45,7 @@ fsm_minimise(struct fsm *fsm)
 	fsm_state_t *mapping = NULL;
 	unsigned *shortest_end_distance = NULL;
 
-#if LOG_TIME
-	struct timeval tv_pre, tv_post;
-
-#define TIME(T) if (0 != gettimeofday(&T, NULL)) { assert(0); }
-#define LOG_TIME_DELTA(NAME)				\
-	fprintf(stderr, "%-8s %.3f msec\n", NAME,	\
-	    1000.0 * (tv_post.tv_sec - tv_pre.tv_sec)	\
-	    + (tv_post.tv_usec - tv_pre.tv_usec)/1000.0);
-#else
-#define TIME(T)
-#define LOG_TIME_DELTA(NAME)
-#endif
+	INIT_TIMERS();
 
 	/* This should only be called with a DFA. */
 	assert(fsm != NULL);
@@ -77,10 +64,10 @@ fsm_minimise(struct fsm *fsm)
 		goto cleanup;
 	}
 
-	TIME(tv_pre);
+	TIME(&pre);
 	collect_labels(fsm, labels, &label_count);
-	TIME(tv_post);
-	LOG_TIME_DELTA("collect_labels");
+	TIME(&post);
+	DIFF_MSEC("collect_labels", pre, post, NULL);
 
 	if (label_count == 0) {
 		r = 1;
@@ -95,12 +82,12 @@ fsm_minimise(struct fsm *fsm)
 
 	orig_states = fsm->statecount;
 
-	TIME(tv_pre);
+	TIME(&pre);
 	r = build_minimised_mapping(fsm, labels, label_count,
 	    shortest_end_distance,
 	    mapping, &minimised_states);
-	TIME(tv_post);
-	LOG_TIME_DELTA("minimise");
+	TIME(&post);
+	DIFF_MSEC("minimise", pre, post, NULL);
 
 	if (!r) {
 		goto cleanup;
@@ -112,15 +99,35 @@ fsm_minimise(struct fsm *fsm)
 	/* Use the mapping to consolidate the current states
 	 * into a new DFA, combining states that could not be
 	 * proven distinguishable. */
-	TIME(tv_pre);
+	TIME(&pre);
 	dst = fsm_consolidate(fsm, mapping, fsm->statecount);
-	TIME(tv_post);
-	LOG_TIME_DELTA("consolidate");
+	TIME(&post);
+	DIFF_MSEC("consolidate", pre, post, NULL);
 
 	if (dst == NULL) {
 		r = 0;
 		goto cleanup;
 	}
+
+#if EXPENSIVE_CHECKS
+	if (!fsm_capture_has_captures(fsm)) {
+		struct fsm *oracle = fsm_minimise_test_oracle(fsm);
+		const size_t exp_count = fsm_countstates(oracle);
+		const size_t got_count = fsm_countstates(dst);
+		if (exp_count != got_count) {
+			fprintf(stderr, "%s: expected minimal DFA with %zu states, got %zu\n",
+			    __func__, exp_count, got_count);
+			fprintf(stderr, "== expected:\n");
+			fsm_print_fsm(stderr, oracle);
+
+			fprintf(stderr, "== got:\n");
+			fsm_print_fsm(stderr, dst);
+			assert(!"non-minimal result");
+		}
+
+		fsm_free(oracle);
+	}
+#endif
 
 	fsm_move(fsm, dst);
 
@@ -272,7 +279,7 @@ build_minimised_mapping(const struct fsm *fsm,
 				}
 			}
 
-			uint64_t checked_labels[4] = {0};
+			uint64_t checked_labels[256/64] = {0};
 			init_label_iterator(&env, ec_i,
 			    should_gather_EC_labels, &li);
 
@@ -420,64 +427,6 @@ check_descending_EC_counts(const struct min_env *env)
 #endif
 
 #define PARTITION_BY_END_STATE_DISTANCE 1
-#if PARTITION_BY_END_STATE_DISTANCE
-/* Use counting sort to construct a permutation vector -- this is an
- * array of offsets into in[N] such that in[pv[0..N]] would give the
- * values of in[] in ascending order (but don't actually rearrange in,
- * just get the offsets). This is O(n). */
-static unsigned *
-build_permutation_vector(const struct fsm_alloc *alloc,
-    size_t length, size_t max_value, unsigned *in)
-{
-	unsigned *out = NULL;
-	unsigned *counts = NULL;
-	size_t i;
-
-	out = f_malloc(alloc, length * sizeof(*out));
-	if (out == NULL) {
-		goto cleanup;
-	}
-	counts = f_calloc(alloc, max_value + 1, sizeof(*out));
-	if (counts == NULL) {
-		goto cleanup;
-	}
-
-	/* Count each distinct value */
-	for (i = 0; i < length; i++) {
-		counts[in[i]]++;
-	}
-
-	/* Convert to cumulative counts, so counts[v] stores the upper
-	 * bound for where sorting would place each distinct value. */
-	for (i = 1; i <= max_value; i++) {
-		counts[i] += counts[i - 1];
-	}
-
-	/* Sweep backwards through the input array, placing each value
-	 * according to the cumulative count. Decrement the count so
-	 * progressively earlier instances of the same value will
-	 * receive earlier offsets in out[]. */
-	for (i = 0; i < length; i++) {
-	        const unsigned pos = length - i - 1;
-		const unsigned value = in[pos];
-		const unsigned count = --counts[value];
-		out[count] = pos;
-	}
-
-	f_free(alloc, counts);
-	return out;
-
-cleanup:
-	if (out != NULL) {
-		f_free(alloc, out);
-	}
-	if (counts != NULL) {
-		f_free(alloc, counts);
-	}
-	return NULL;
-}
-#endif
-
 static int
 populate_initial_ecs(struct min_env *env, const struct fsm *fsm,
 	const unsigned *shortest_end_distance)
@@ -575,7 +524,7 @@ populate_initial_ecs(struct min_env *env, const struct fsm *fsm,
 	/* Build a permutation vector of the counts, such
 	 * that counts[pv[i..N]] would return the values
 	 * in counts[] in ascending order. */
-	pv = build_permutation_vector(fsm->opt->alloc,
+	pv = permutation_vector(fsm->opt->alloc,
 	    sed_limit, count_max, counts);
 	if (pv == NULL) {
 		goto cleanup;
@@ -615,7 +564,7 @@ populate_initial_ecs(struct min_env *env, const struct fsm *fsm,
 	 * [1]: http://www.sudleyplace.com/APL/Anatomy%20of%20An%20Idiom.pdf
 	 * [2]: https://bitbucket.org/ngn/k/src
 	 */
-	ranking = build_permutation_vector(fsm->opt->alloc,
+	ranking = permutation_vector(fsm->opt->alloc,
 	    sed_limit, sed_limit, pv);
 	if (ranking == NULL) {
 		goto cleanup;
@@ -886,7 +835,8 @@ try_partition(struct min_env *env, unsigned char label,
 	/* Use the edge_set's label grouping to check a
 	 * set of labels at once, and note which labels
 	 * have already been checked. */
-	if (edge_set_check_edges(states[cur].edges, label,
+	if (edge_set_check_edges_with_EC_mapping(states[cur].edges, label,
+		env->ec_map_count, env->state_ecs,
 		&first_dst_state, first_dst_label_set)) {
 
 		assert(first_dst_state < env->ec_map_count);
@@ -911,7 +861,7 @@ try_partition(struct min_env *env, unsigned char label,
 	cur = env->jump[cur];
 
 #if LOG_PARTITIONS > 1
-	fprintf(stderr, "# --- try_partition: first, %u, has to %d -> first_ec %d\n", cur, to, first_ec);
+	fprintf(stderr, "# --- try_partition: first, %u, has first_dst_state %d -> first_ec %d\n", cur, first_dst_state, first_ec);
 #endif
 
 	/* initialize the new EC -- empty */
@@ -921,7 +871,8 @@ try_partition(struct min_env *env, unsigned char label,
 		uint64_t cur_label_set[256/64];
 		fsm_state_t cur_dst_state;
 
-		if (edge_set_check_edges(states[cur].edges, label,
+		if (edge_set_check_edges_with_EC_mapping(states[cur].edges, label,
+			env->ec_map_count, env->state_ecs,
 			&cur_dst_state, cur_label_set)) {
 			assert(cur_dst_state < env->ec_map_count);
 			to_ec = env->state_ecs[cur_dst_state];

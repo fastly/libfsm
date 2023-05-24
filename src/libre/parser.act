@@ -247,7 +247,7 @@
 
 		n = sprintf(s, "%.*s", (int) sz - 3 - 1, msg);
 		if (n == sz - 3 - 1) {
-			strcpy(s + sz, "...");
+			strcpy(s + n, "...");
 		}
 	}
 
@@ -311,56 +311,94 @@
 
 %terminals%
 
+	/*
+	 * The (void) casts on output parameters that are unused in some dialects.
+	 * This keeps gcc from complaining about generated variables that are
+	 * assigned a value but not used, without disabling the warning in general.
+	 */
+
 	INVERT: () -> (c :char) = @{
 		@c = '^';
+
+		(void) @c;
 	@};
 
 	RANGE: () -> (c :char, start :pos, end :pos) = @{
 		@c = '-';
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @c;
+		(void) @start;
+		(void) @end;
 	@};
 
 	OPENGROUP: () -> (start :pos, end :pos) = @{
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	OPENGROUPINV: () -> (start :pos, end :pos) = @{
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	OPENGROUPCB: () -> (start :pos, end :pos) = @{
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	OPENGROUPINVCB: () -> (start :pos, end :pos) = @{
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	CLOSEGROUP: () -> (c :char, start :pos, end :pos) = @{
 		@c = ']';
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @c;
+		(void) @start;
+		(void) @end;
 	@};
 
 	CLOSEGROUPRANGE: () -> (c :char, start :pos, end :pos) = @{
 		@c = '-';
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @c;
+		(void) @start;
+		(void) @end;
 	@};
 
 	OPENCOUNT: () -> (start :pos, end :pos) = @{
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	CLOSECOUNT: () -> (start :pos, end :pos) = @{
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	ESC: () -> (c :char, start :pos, end :pos) = @{
@@ -384,6 +422,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	NOESC: () -> (c :char, start :pos, end :pos) = @{
@@ -395,6 +436,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	UNSUPPORTED: () -> (c :char, start :pos, end :pos) = @{
@@ -408,6 +452,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	CONTROL: () -> (c :char, start :pos, end :pos) = @{
@@ -442,6 +489,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	OCT: () -> (c :char, start :pos, end :pos) = @{
@@ -454,6 +504,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 
 		errno = 0;
 
@@ -494,6 +547,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 
 		errno = 0;
 
@@ -536,6 +592,9 @@
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
 
+		(void) @start;
+		(void) @end;
+
 		@c = lex_state->buf.a[0];
 	@};
 
@@ -545,6 +604,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 
 		@c = lex_state->buf.a[0];
 	@};
@@ -556,6 +618,9 @@
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
 
+		(void) @start;
+		(void) @end;
+
 		@c = lex_state->buf.a[0];
 	@};
 
@@ -565,6 +630,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 
 		@c = lex_state->buf.a[0];
 	@};
@@ -598,6 +666,9 @@
 
 		@start = lex_state->lx.start;
 		@end   = lex_state->lx.end;
+
+		(void) @start;
+		(void) @end;
 	@};
 
 	FLAG_INSENSITIVE: () -> (flag :re_flags) = @{
@@ -701,7 +772,7 @@
 
 	<err-unsupported> = @{
 		if (err->e == RE_ESUCCESS) {
-			err->e = RE_EXUNSUPPORTD;
+			err->e = RE_EUNSUPPORTED;
 		}
 		@!;
 	@};
@@ -800,7 +871,7 @@
 
 	<ast-range-endpoint-literal>: (c :char) -> (e :endpoint) = @{
 		@e.type = AST_ENDPOINT_LITERAL;
-		@e.u.literal.c = @c;
+		@e.u.literal.c = (unsigned char)@c;
 	@};
 
 	<ast-range-endpoint-class>: (id :ast_class_id) -> (e :endpoint) = @{
@@ -972,7 +1043,7 @@
 
 		if (@from.type != AST_ENDPOINT_LITERAL ||
 			@to.type != AST_ENDPOINT_LITERAL) {
-			err->e = RE_EXUNSUPPORTD;
+			err->e = RE_EUNSUPPORTED;
 			@!;
 		}
 
@@ -1095,6 +1166,17 @@
 		err->e = RE_ESUCCESS;
 
 		ADVANCE_LEXER;
+
+#define BUILD_FOR_FUZZER 0
+#if BUILD_FOR_FUZZER
+		/* these errors currently are not handled properly */
+		if (act_state->lex_tok == TOK_ERROR) {
+			fprintf(stderr, "syntax error\n");
+			lx->free(lx->buf_opaque);
+			goto error;
+		}
+#endif
+
 		DIALECT_ENTRY(&flags, lex_state, act_state, err, &ast->expr);
 
 		lx->free(lx->buf_opaque);

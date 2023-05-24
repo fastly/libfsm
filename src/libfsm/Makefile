@@ -13,12 +13,14 @@ SRC += src/libfsm/endids.c
 SRC += src/libfsm/equal.c
 SRC += src/libfsm/exec.c
 SRC += src/libfsm/fsm.c
+SRC += src/libfsm/gen.c
 SRC += src/libfsm/mode.c
 SRC += src/libfsm/start.c
 SRC += src/libfsm/state.c
 SRC += src/libfsm/trim.c
 SRC += src/libfsm/example.c
 SRC += src/libfsm/getc.c
+SRC += src/libfsm/shuffle.c
 SRC += src/libfsm/vm.c
 
 # graph things
@@ -46,6 +48,9 @@ SRC += src/libfsm/walk2.c
 # parser
 SRC += src/libfsm/lexer.c
 SRC += src/libfsm/parser.c
+
+# testing
+SRC += src/libfsm/minimise_test_oracle.c
 
 .for src in ${SRC:Msrc/libfsm/lexer.c}
 CFLAGS.${src} += -D LX_HEADER='"lexer.h"'
