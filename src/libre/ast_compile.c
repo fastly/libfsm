@@ -159,7 +159,8 @@ fsm_unionxy(struct fsm *a, struct fsm *b, fsm_state_t x, fsm_state_t y)
 	{
 		size_t i;
 
-		for (i = 0; i < b->statecount; i++) {
+		const size_t statecount = fsm_countstates(b);
+		for (i = 0; i < statecount; i++) {
 			fsm_setend(b, i, 0);
 		}
 	}
@@ -207,11 +208,11 @@ addedge_literal(struct comp_env *env, enum re_flags re_flags,
 	assert(to < env->fsm->statecount);
 
 	if (re_flags & RE_ICASE) {
-		if (!fsm_addedge_literal(fsm, from, to, tolower((unsigned char) c))) {
+		if (!fsm_addedge_literal(fsm, from, to, (char)tolower((unsigned char) c))) {
 			return 0;
 		}
 		
-		if (!fsm_addedge_literal(fsm, from, to, toupper((unsigned char) c))) {
+		if (!fsm_addedge_literal(fsm, from, to, (char)toupper((unsigned char) c))) {
 			return 0;
 		}
 	} else {

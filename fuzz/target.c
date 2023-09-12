@@ -1,11 +1,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <assert.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <assert.h>
 #include <string.h>
 #include <inttypes.h>
 #include <ctype.h>
@@ -121,7 +121,12 @@ build(const char *pattern)
 	total_usec += delta_usec;
 
 	if (total_usec > TIMEOUT_USEC) {
+#ifndef EXPENSIVE_CHECKS
 		assert(!"timeout");
+#else
+		fprintf(stderr, "exiting zero due to timeout under EXPENSIVE_CHECKS\n");
+		exit(0);
+#endif
 	}
 
 	return fsm;
@@ -283,7 +288,6 @@ fuzz_all_print_functions(FILE *f, const char *pattern, bool det, bool min, const
 	};
 
 	fsm = re_comp(RE_PCRE, scanner_next, &s, &options, RE_MULTI, &err);
-
 	if (fsm == NULL) {
 		/* ignore invalid regexp syntax, etc. */
 		return EXIT_SUCCESS;
@@ -302,6 +306,9 @@ fuzz_all_print_functions(FILE *f, const char *pattern, bool det, bool min, const
 			}
 		}
 	}
+
+	/* if errno isn't zero already, I want to know why */
+	assert(errno == 0);
 
 	/* see if this triggers any asserts */
 	int r = 0;
@@ -335,16 +342,17 @@ static enum run_mode
 get_run_mode(void)
 {
 	const char *mode = getenv("MODE");
-	if (mode != NULL) {
-		switch (mode[0]) {
-		case 'm': return MODE_SHUFFLE_MINIMISE;
-		case 'p': return MODE_ALL_PRINT_FUNCTIONS;
-		default:
-			break;
-		}
+	if (mode == NULL) {
+		return MODE_DEFAULT;
 	}
 
-	return MODE_DEFAULT;
+	switch (mode[0]) {
+	case 'm': return MODE_SHUFFLE_MINIMISE;
+	case 'p': return MODE_ALL_PRINT_FUNCTIONS;
+	case 'd':
+	default:
+		return MODE_DEFAULT;
+	}
 }
 
 static FILE *dev_null = NULL;
@@ -352,8 +360,6 @@ static FILE *dev_null = NULL;
 int
 harness_fuzzer_target(const uint8_t *data, size_t size)
 {
-	enum run_mode run_mode = get_run_mode();
-
 	if (size < 1) {
 		return EXIT_SUCCESS;
 	}
@@ -366,7 +372,7 @@ harness_fuzzer_target(const uint8_t *data, size_t size)
 
 	const char *pattern = (const char *)data_buf;
 
-	switch (run_mode) {
+	switch (get_run_mode()) {
 	case MODE_DEFAULT:
 		return build_and_codegen(pattern);
 
@@ -390,4 +396,6 @@ harness_fuzzer_target(const uint8_t *data, size_t size)
 		return res;
 	}
 	}
+
+	assert(!"unreached");
 }
