@@ -125,7 +125,21 @@ re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 
 	if (res < 0) {
 		ast_free(ast);
-		if (err != NULL) { err->e = RE_EERRNO; }
+		if (err != NULL) {
+			if (res == AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE) {
+				err->e = RE_EUNSUPPPCRE;
+			} else if (res == AST_ANALYSIS_ERROR_MEMORY) {
+				/* This case comes up during fuzzing. */
+				if (err->e == RE_ESUCCESS) {
+					err->e = RE_EERRNO;
+					errno = ENOMEM;
+				}
+			} else if (res == AST_ANALYSIS_ERROR_UNSUPPORTED_CAPTURE) {
+				err->e = RE_EUNSUPCAPTUR;
+			} else if (err->e == RE_ESUCCESS) {
+				err->e = RE_EERRNO;
+			}
+		}
 		return NULL;
 	}
 
@@ -249,6 +263,8 @@ re_is_literal(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 	/*
 	 * Literals have an enclosing group #0, and we skip it for our purposes.
 	 * Parsing a satisfiable expression is required to produce group #0.
+	 * All dialects do this, regardless of whether their syntax provides
+	 * for group capture of subexpressions.
 	 * If this doesn't exist, whatever we parsed, it's not a literal.
 	 *
 	 * I'm not doing this as an assertion because AST rewriting is free to
