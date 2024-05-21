@@ -19,22 +19,37 @@ struct queue {
 	size_t rd;
 	size_t wr;
 	size_t capacity;
-	fsm_state_t q[1 /* capacity */];
+	int dynamic;
+	fsm_state_t *q;
 };
 
 struct queue *
 queue_new(const struct fsm_alloc *a, size_t max_capacity)
 {
 	struct queue *q;
-	size_t alloc_size;
 	if (max_capacity == 0) { return NULL; }
-	alloc_size = sizeof(*q) + (max_capacity - 1) * sizeof(q->q[0]);
 
-	q = f_calloc(a, 1, alloc_size);
+	q = f_calloc(a, 1, sizeof(*q));
 	if (q == NULL) { return NULL; }
+
+	q->q = f_calloc(a, max_capacity, sizeof(q->q[0]));
+	if (q->q == NULL) {
+		f_free(a, q);
+		return NULL;
+	}
 
 	q->alloc = a;
 	q->capacity = max_capacity;
+
+	return q;
+}
+
+struct queue *
+queue_new_dynamic(const struct fsm_alloc *a, size_t hint)
+{
+	struct queue *q = queue_new(a, hint);
+	if (q == NULL) { return NULL; }
+	q->dynamic = 1;
 
 	return q;
 }
@@ -51,9 +66,19 @@ queue_push(struct queue *q, fsm_state_t state)
 		 * memmove everything after reading 1. */
 		if (q->rd > 0 && q->rd < q->wr) {
 			memmove(&q->q[0], &q->q[q->rd],
-			    q->rd * sizeof(q->q[0]));
+			    (q->capacity - q->rd) * sizeof(q->q[0]));
 			q->wr -= q->rd;
 			q->rd = 0;
+		} else if (q->dynamic) {
+			const size_t ncap = 2*q->capacity;
+			fsm_state_t *nq = f_realloc(q->alloc,
+			    q->q, ncap * sizeof(q->q[0]));
+			if (nq == NULL) {
+				return 0;
+			}
+
+			q->capacity = ncap;
+			q->q = nq;
 		} else {
 			return 0;
 		}
@@ -88,5 +113,6 @@ queue_pop(struct queue *q, fsm_state_t *state)
 void
 queue_free(struct queue *q)
 {
+	f_free(q->alloc, q->q);
 	f_free(q->alloc, q);
 }

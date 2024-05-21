@@ -11,7 +11,7 @@
 
 struct fsm_alloc;
 
-/* Basic fixed-capacity FIFO queue. */
+/* Basic FIFO queue. */
 struct queue;
 
 /*
@@ -21,6 +21,11 @@ struct queue;
  */
 struct queue *
 queue_new(const struct fsm_alloc *a, size_t max_capacity);
+
+/* Allocate a new queue, with dynamic reallocation to grow
+ * the backing memory as necessary. */
+struct queue *
+queue_new_dynamic(const struct fsm_alloc *a, size_t hint);
 
 /*
  * Push a pointer into the queue. Returns 1 on success,
