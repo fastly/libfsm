@@ -8,6 +8,9 @@
 #define ADT_BITMAP_H
 
 #include <stdint.h>
+#include <limits.h>
+
+#include <stdio.h>
 #include "print/esc.h"
 
 struct fsm_state;
