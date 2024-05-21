@@ -54,5 +54,17 @@ bm_snprint(const struct bm *bm, const struct fsm_options *opt,
 	int boxed,
 	escputc *escputc);
 
+void
+bm_copy(struct bm *dst, const struct bm *src);
+
+void
+bm_intersect(struct bm *dst, const struct bm *src);
+
+void
+bm_union(struct bm *dst, const struct bm *src);
+
+int
+bm_any(const struct bm *bm);
+
 #endif
 
