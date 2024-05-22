@@ -35,6 +35,15 @@ bm_set(struct bm *bm, size_t i)
 	u64bitset_set(bm->map, i);
 }
 
+void
+bm_unset(struct bm *bm, size_t i)
+{
+	assert(bm != NULL);
+	assert(i <= UCHAR_MAX);
+
+	u64bitset_clear(bm->map, i);
+}
+
 uint64_t *
 bm_nth_word(struct bm *bm, size_t n)
 {

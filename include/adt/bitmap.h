@@ -26,6 +26,9 @@ bm_get(const struct bm *bm, size_t i);
 void
 bm_set(struct bm *bm, size_t i);
 
+void
+bm_unset(struct bm *bm, size_t i);
+
 /* Get a writeable pointer to the Nth word of the char set bitmap,
  * or NULL if out of bounds. */
 uint64_t *
