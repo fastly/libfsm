@@ -29,7 +29,7 @@
 #define LOG_RM_EPSILONS_CAPTURES 0
 #define DEF_CARRY_ENDIDS_COUNT 2
 
-#define LOG_LEVEL 3
+#define LOG_LEVEL 1
 
 #if LOG_LEVEL > 0
 static bool log_it;
@@ -349,7 +349,7 @@ mark_states_reachable_by_label(const struct fsm *nfa, uint64_t *reachable_by_lab
 static bool
 remap_eager_endids__push_state_stack(struct ee_cache_env *env, /*fsm_state_t labeled_edge_from, */ fsm_state_t s_id)
 {
-	LOG(1, "%s: s_id %d\n", __func__, s_id);
+	LOG(2, "%s: s_id %d\n", __func__, s_id);
 	struct ee_state_stack *sstack = &env->stack.state;
 	if (sstack->used == sstack->ceil) {
 		const size_t nceil = sstack->ceil == 0
@@ -486,9 +486,9 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 	struct state_iter eps_iter;
 	fsm_state_t eps_id;
 
-	LOG(1, "%s: s_id %d\n", __func__, s_id);
+	LOG(2, "%s: s_id %d\n", __func__, s_id);
 
-	if (LOG_LEVEL > 0) {
+	if (LOG_LEVEL > 1) {
 		fprintf(stderr, "%s: current stacks:\n", __func__);
 		for (size_t i = 0; i < env->stack.state.used; i++) {
 			fprintf(stderr, "-- state %zd: id %d, count %u\n",
@@ -685,8 +685,6 @@ remap_eager_endids(struct fsm *nfa, struct state_set **eclosures)
 		return 1;	/* nothing to do */
 	}
 
-	fprintf(stderr, "%s\n", __func__);
-
 	const fsm_state_t state_count = fsm_countstates(nfa);
 	const size_t state_words = u64bitset_words(state_count);
 	int res = 0;
@@ -763,20 +761,32 @@ remap_eager_endids(struct fsm *nfa, struct state_set **eclosures)
 
 		env.start_of_path = s_id;
 
+		if (!remap_eager_endids__push_state_stack(&env, s_id)) {
+			goto cleanup;
+		}
+
 		if (!remap_eager_endids__step_for_state(&env, s_id, NULL)) {
 			goto cleanup;
 		}
 
 		CLEAR_VISITED(nfa, s_id);
+		unsigned count;
+		if (!remap_eager_endids__pop_state_stack(&env, &s_id, &count)) {
+			goto cleanup;
+		}
+
 
 		assert(env.stack.state.used == 0);
 		assert(env.stack.data.used == 0);
 	}
 
 	res = 1;
-	LOG(0, "%s: finishing up... [[\n", __func__);
-	fsm_eager_endid_dump(stderr, nfa);
-	LOG(0, "]]\n");
+
+	if (LOG_LEVEL >= 2) {
+		LOG(2, "%s: finishing up... [[\n", __func__);
+		fsm_eager_endid_dump(stderr, nfa);
+		LOG(2, "]]\n");
+	}
 
 cleanup:
 	f_free(nfa->alloc, ends);
@@ -1022,7 +1032,9 @@ carry_endids(struct fsm *fsm, struct state_set *states,
 	}
 	env.ok = 1;
 
-	fsm_eager_endid_dump(stderr, fsm);
+	if (LOG_LEVEL >= 2) {
+		fsm_eager_endid_dump(stderr, fsm);
+	}
 
 	/* collect from states */
 	for (state_set_reset(states, &it); state_set_next(&it, &s); ) {

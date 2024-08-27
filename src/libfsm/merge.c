@@ -22,6 +22,7 @@
 #include "capture.h"
 #include "internal.h"
 #include "endids.h"
+#include "eager_endid.h"
 
 #define LOG_MERGE_ENDIDS 0
 
@@ -36,6 +37,9 @@ copy_capture_actions(struct fsm *dst, struct fsm *src);
 
 static int
 copy_end_ids(struct fsm *dst, struct fsm *src, fsm_state_t base_src);
+
+static int
+copy_eager_end_ids(struct fsm *dst, struct fsm *src, fsm_state_t base_src);
 
 static struct fsm *
 merge(struct fsm *dst, struct fsm *src,
@@ -107,6 +111,11 @@ merge(struct fsm *dst, struct fsm *src,
 	}
 
 	if (!copy_end_ids(dst, src, *base_src)) {
+		/* non-recoverable -- destructive operation */
+		return NULL;
+	}
+
+	if (!copy_eager_end_ids(dst, src, *base_src)) {
 		/* non-recoverable -- destructive operation */
 		return NULL;
 	}
@@ -186,6 +195,41 @@ copy_end_ids(struct fsm *dst, struct fsm *src, fsm_state_t base_src)
 	env.base_src = base_src;
 
 	return fsm_endid_iter_bulk(src, copy_end_ids_cb, &env);
+}
+
+struct copy_eager_end_ids_env {
+	bool ok;
+	char tag;
+	struct fsm *dst;
+	struct fsm *src;
+	fsm_state_t base_src;
+};
+
+static int
+copy_eager_end_ids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
+{
+	struct copy_eager_end_ids_env *env = opaque;
+	assert(env->tag == 'E');
+	if (!fsm_eager_endid_insert_entry(env->dst, from + env->base_src, to + env->base_src, id)) {
+		env->ok = false;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+copy_eager_end_ids(struct fsm *dst, struct fsm *src, fsm_state_t base_src)
+{
+	struct copy_eager_end_ids_env env = {
+		.tag = 'E',	/* for Eager */
+		.ok = true,
+		.dst = dst,
+		.src = src,
+		.base_src = base_src,
+	};
+	fsm_eager_endid_iter_edges_all(src, copy_eager_end_ids_cb, &env);
+	return env.ok;
 }
 
 struct fsm *

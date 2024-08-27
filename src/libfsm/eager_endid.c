@@ -17,20 +17,19 @@
 
 #include "eager_endid.h"
 
-#define DEF_ENTRY_CEIL 256
+#define DEF_ENTRY_CEIL 32
 
-#define LOG_LEVEL 2
+#define LOG_LEVEL 1
 
 #define EAGER_ENDID_EDGE_FROM_START ((fsm_state_t)-2)
 
 struct eager_endid_info {
-	/* janky vector impl, replace with something else later */
-	size_t ceil;
-	size_t used;
-
 	fsm_eager_endid_cb *cb;
 	void *opaque;
 
+	/* janky vector impl, replace with something else later */
+	size_t ceil;
+	size_t used;
 	struct eager_endid_entry {
 		fsm_state_t from; /* or EAGER_ENDID_EDGE_FROM_START */
 		fsm_state_t to;
@@ -101,13 +100,19 @@ static int
 insert_eager_endid_entry(const struct fsm_alloc *alloc, struct eager_endid_info *info,
     fsm_state_t from, fsm_state_t to, fsm_end_id_t id)
 {
-#if LOG_LEVEL > 0
+#if LOG_LEVEL > 1
 	fprintf(stderr, "%s: %d, %d, %d\n", __func__, from, to, id);
 #endif
 	if (info->ceil == info->used) {
-		(void)alloc;
-		assert(!"todo: grow");
-		return 0;
+		const size_t nceil = 2*info->used;
+		struct eager_endid_entry *nentries = f_realloc(alloc,
+		    info->entries, nceil * sizeof(info->entries[0]));
+		if (nentries == NULL) {
+			return 0;
+		}
+		fprintf(stderr, "%s: grew %zd -> %zd\n", __func__, info->ceil, nceil);
+		info->ceil = nceil;
+		info->entries = nentries;
 	}
 
 	/* FIXME linear scan */
@@ -158,7 +163,7 @@ fsm_seteagerendid(struct fsm *fsm, fsm_end_id_t id)
 		return 0;
 	}
 
-#if LOG_LEVEL > 0
+#if LOG_LEVEL > 1
 	fprintf(stderr, "%s: id %d\n", __func__, id);
 	fsm_dump(stderr, fsm);
 #endif
@@ -184,7 +189,9 @@ fsm_seteagerendid(struct fsm *fsm, fsm_end_id_t id)
 		struct state_iter epsilon_iter;
 		fsm_state_t to;
 
+#if LOG_LEVEL > 1
 		fprintf(stderr, "%s: s_i %d, is_end %d\n", __func__, s_i, fsm_isend(fsm, s_i));
+#endif
 
 		struct fsm_state *s = &fsm->states[s_i];
 

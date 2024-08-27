@@ -2,6 +2,8 @@
 
 int main(void)
 {
+	assert(!"fixme: revisit once remap_eager_endids is more efficient");
+
 	struct eager_endid_test test = {
 		.patterns =  {
 			"apple",

@@ -24,7 +24,7 @@
 
 #define LOG_EXEC 0
 
-#define LOG_EAGER 1
+#define LOG_EAGER 0
 
 static int
 transition(const struct fsm *fsm, fsm_state_t state, int c,

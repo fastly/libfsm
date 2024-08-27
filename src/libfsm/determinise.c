@@ -746,6 +746,8 @@ remap_eager_endids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *o
 {
 	struct remap_eager_endids_env *env = opaque;
 	const struct map *map = env->map;
+
+#if LOG_REMAP
 	fprintf(stderr, "%s: remapping (%d -> %d, %d)\n", __func__, from, to, id);
 
 	for (size_t f_i = 0; f_i < map->count; f_i++) { /* from */
@@ -756,6 +758,7 @@ remap_eager_endids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *o
 		interned_state_set_dump(stderr, env->issp, f_m->iss);
 		fprintf(stderr, "\n");
 	}
+#endif
 
 	/* naive implementation. potentially very expensive. rework later. */
 	for (size_t f_i = 0; f_i < map->count; f_i++) { /* from */
@@ -773,16 +776,20 @@ remap_eager_endids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *o
 					const fsm_state_t dfa_from = f_m->dfastate;
 					const fsm_state_t dfa_to = t_m->dfastate;
 					if (!is_connected(env->dst, dfa_from, dfa_to)) {
+#if LOG_REMAP
 						fprintf(stderr, "determinise:%s: (%d -> %d, %d) to (%d -> %d, %d) is not connected on dfa, skipping\n",
 						    __func__,
 						    from, to, id,
 						    dfa_from, dfa_to, id);
+#endif
 						continue;
 					}
+#if LOG_REMAP
 					fprintf(stderr, "determinise:%s: rewriting (%d -> %d, %d) to (%d -> %d, %d)\n",
 					    __func__,
 					    from, to, id,
 					    dfa_from, dfa_to, id);
+#endif
 					if (!fsm_eager_endid_insert_entry(env->dst,
 						dfa_from, dfa_to, id)) {
 						env->ok = false;
@@ -796,7 +803,7 @@ remap_eager_endids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *o
 	return 1;
 }
 
-#define LOG_REMAP 1
+#define LOG_REMAP 0
 #if LOG_REMAP
 #include <fsm/print.h>
 #endif
