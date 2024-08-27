@@ -253,6 +253,10 @@ fsm_determinise(struct fsm *nfa)
 			goto cleanup;
 		}
 
+		if (!remap_eager_endids(&map, issp, dfa, nfa)) {
+			goto cleanup;
+		}
+
 		fsm_move(nfa, dfa);
 	}
 
@@ -711,6 +715,128 @@ cleanup:
 	f_free(dst_dfa->alloc, reverse_mappings);
 
 	return res;
+}
+
+struct remap_eager_endids_env {
+	bool ok;
+	const struct map *map;
+	struct interned_state_set_pool *issp;
+	struct fsm *dst;
+	const struct fsm *src;
+
+};
+
+static bool
+is_connected(const struct fsm *dfa, fsm_state_t from, fsm_state_t to)
+{
+	struct edge_group_iter iter;
+	struct edge_group_iter_info info;
+
+	assert(from < dfa->statecount);
+	edge_set_group_iter_reset(dfa->states[from].edges,
+	    EDGE_GROUP_ITER_ALL, &iter);
+	while (edge_set_group_iter_next(&iter, &info)) {
+		if (info.to == to) { return true; }
+	}
+	return false;
+}
+
+static int
+remap_eager_endids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
+{
+	struct remap_eager_endids_env *env = opaque;
+	const struct map *map = env->map;
+	fprintf(stderr, "%s: remapping (%d -> %d, %d)\n", __func__, from, to, id);
+
+	for (size_t f_i = 0; f_i < map->count; f_i++) { /* from */
+		struct mapping *f_m = map->buckets[f_i];
+		if (f_m == NULL) { continue; }
+
+		fprintf(stderr, "    == dfastate %ld: ", f_m->dfastate);
+		interned_state_set_dump(stderr, env->issp, f_m->iss);
+		fprintf(stderr, "\n");
+	}
+
+	/* naive implementation. potentially very expensive. rework later. */
+	for (size_t f_i = 0; f_i < map->count; f_i++) { /* from */
+		struct mapping *f_m = map->buckets[f_i];
+		if (f_m == NULL) { continue; }
+
+		struct state_set *f_ss = interned_state_set_get_state_set(env->issp, f_m->iss);
+		if (state_set_contains(f_ss, from)) {
+			for (size_t t_i = 0; t_i < map->count; t_i++) { /* to */
+				struct mapping *t_m = map->buckets[t_i];
+				if (t_m == NULL) { continue; }
+				struct state_set *t_ss = interned_state_set_get_state_set(env->issp, t_m->iss);
+
+				if (state_set_contains(t_ss, to)) {
+					const fsm_state_t dfa_from = f_m->dfastate;
+					const fsm_state_t dfa_to = t_m->dfastate;
+					if (!is_connected(env->dst, dfa_from, dfa_to)) {
+						fprintf(stderr, "determinise:%s: (%d -> %d, %d) to (%d -> %d, %d) is not connected on dfa, skipping\n",
+						    __func__,
+						    from, to, id,
+						    dfa_from, dfa_to, id);
+						continue;
+					}
+					fprintf(stderr, "determinise:%s: rewriting (%d -> %d, %d) to (%d -> %d, %d)\n",
+					    __func__,
+					    from, to, id,
+					    dfa_from, dfa_to, id);
+					if (!fsm_eager_endid_insert_entry(env->dst,
+						dfa_from, dfa_to, id)) {
+						env->ok = false;
+						return 0;
+					}
+				}
+			}
+		}
+	}
+
+	return 1;
+}
+
+#define LOG_REMAP 1
+#if LOG_REMAP
+#include <fsm/print.h>
+#endif
+
+/* For every existing eager endid metadata on src_nfa, ee(From, To, Id):
+ *
+ * For every remapped state F' where From is in the mapping->iss for F'
+ * For every remapped state T' where To is in the mapping->iss for T'
+ * add eager endid metadata on dst_dfa ee(F', T', Id) */
+static int
+remap_eager_endids(const struct map *map, struct interned_state_set_pool *issp,
+    struct fsm *dst_dfa, const struct fsm *src_nfa)
+{
+	if (!fsm_eager_endid_has_eager_endids(src_nfa)) {
+		return 1;	/* nothing to do */
+	}
+#if LOG_REMAP
+	fprintf(stderr, "==== before determinisation\n");
+	fsm_dump(stderr, src_nfa);
+	fsm_eager_endid_dump(stderr, src_nfa);
+#endif
+
+	struct remap_eager_endids_env env = {
+		.ok = true,
+		.map = map,
+		.issp = issp,
+		.dst = dst_dfa,
+		.src = src_nfa,
+	};
+	fsm_eager_endid_iter_edges_all(src_nfa, remap_eager_endids_cb, &env);
+
+#if LOG_REMAP
+	if (env.ok) {
+		fprintf(stderr, "==== after determinisation\n");
+		fsm_dump(stderr, dst_dfa);
+		fsm_eager_endid_dump(stderr, dst_dfa);
+	}
+#endif
+
+	return env.ok;
 }
 
 static int

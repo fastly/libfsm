@@ -93,6 +93,11 @@ fsm_setendid
 fsm_mapendids
 fsm_increndids
 
+fsm_seteagerendid
+
+# short term hack
+fsm_eager_endid_set_cb
+
 fsm_countedges
 fsm_countstates
 

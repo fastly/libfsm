@@ -115,6 +115,7 @@ SUBDIR += tests/eclosure
 SUBDIR += tests/equals
 SUBDIR += tests/subtract
 SUBDIR += tests/determinise
+SUBDIR += tests/eager_endids
 SUBDIR += tests/endids
 SUBDIR += tests/epsilons
 SUBDIR += tests/fsm
