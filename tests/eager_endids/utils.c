@@ -54,6 +54,12 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 	struct fsm *fsm = fsm_union_array(fsms_used, fsms, NULL);
 	assert(fsm != NULL);
 
+	if (log) {
+		fprintf(stderr, "==== combined\n");
+		fsm_dump(stderr, fsm);
+		fprintf(stderr, "====\n");
+	}
+
 	ret = fsm_determinise(fsm);
 	assert(ret == 1);
 	
@@ -61,6 +67,13 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 		ret = fsm_minimise(fsm);
 		assert(ret == 1);
 	}
+
+	if (log) {
+		fprintf(stderr, "==== combined (post det+min)\n");
+		fsm_dump(stderr, fsm);
+		fprintf(stderr, "====\n");
+	}
+
 
 	struct cb_info endids = { 0 };
 	fsm_eager_endid_set_cb(fsm, append_eager_endid_cb, &endids);
@@ -104,7 +117,7 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 
 		if (log) {
 			fprintf(stderr, "-- got %zd:", endids.used);
-			for (size_t i = 0; i < expected_id_count; i++) {
+			for (size_t i = 0; i < endids.used; i++) {
 				fprintf(stderr, " %d", endids.ids[i]);
 			}
 			fprintf(stderr, "\n");
