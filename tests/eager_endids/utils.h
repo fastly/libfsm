@@ -25,8 +25,8 @@
 
 #include <fsm/fsm.h>
 
-#define MAX_PATTERNS 8
-#define MAX_INPUTS 8
+#define MAX_PATTERNS 10
+#define MAX_INPUTS 16
 #define MAX_ENDIDS 8
 
 struct eager_endid_test {
