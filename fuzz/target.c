@@ -416,6 +416,9 @@ gen_individual_check_combined_cb(const struct fsm *fsm,
 #define DEF_MAX_STEPS 10000
 #define DEF_MAX_MATCH_COUNT 1000
 
+void
+fsm_eager_endid_dump(FILE *f, const struct fsm *fsm);
+
 static int
 fuzz_eager_endids(const uint8_t *data, size_t size)
 {
@@ -472,11 +475,24 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 						len--; /* drop trailing newline */
 					}
 					pattern[len] = '\0';
-					env.patterns[env.pattern_count++] = pattern;
+                                        bool keep = true;
 
-					if (len > max_pattern_length) {
+                                        for (size_t i = 0; i < len - 1; i++) {
+                                            if (pattern[i] == '\\' && pattern[i + 1] == 'x') {
+                                                /* ignore unhandled parser errors from "\x" */
+                                                keep = false;
+                                            }
+                                        }
+
+                                        if (keep) {
+                                            env.patterns[env.pattern_count++] = pattern;
+
+                                            if (len > max_pattern_length) {
 						max_pattern_length = len;
-					}
+                                            }
+                                        } else {
+                                            free(pattern);
+                                        }
 					prev = offset;
 					dots = 0;
 				}
