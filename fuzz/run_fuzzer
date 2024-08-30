@@ -10,6 +10,10 @@ SECONDS=${SECONDS:-60}
 WORKERS=${WORKERS:-4}
 SEEDS=${SEEDS:-seeds}
 
+if [ ${VALGRIND} ]; then
+    VALGRIND=valgrind
+fi
+
 if [ "${1}" = "-h" ]; then
     echo "usage: $0"
     echo " - set these via env: [WORKERS=${WORKERS}] [SECONDS=${SECONDS}] [SEEDS=seed_directory]"
@@ -29,7 +33,7 @@ fi
 
 if [ -z "${ARG}" ]; then
     echo "\n==== ${FUZZER}"
-    exec ${FUZZER} -jobs=${WORKERS} -workers=${WORKERS} -max_total_time=${SECONDS} ${SEEDS}
+    exec ${VALGRIND} ${FUZZER} -jobs=${WORKERS} -workers=${WORKERS} -max_total_time=${SECONDS} ${SEEDS}
 else
-    exec ${FUZZER} ${ARG}
+    exec ${VALGRIND} ${FUZZER} ${ARG}
 fi

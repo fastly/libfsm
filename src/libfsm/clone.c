@@ -19,6 +19,7 @@
 #include "internal.h"
 #include "capture.h"
 #include "endids.h"
+#include "eager_endid.h"
 
 #define LOG_CLONE_ENDIDS 0
 
@@ -27,6 +28,9 @@ copy_capture_actions(struct fsm *dst, const struct fsm *src);
 
 static int
 copy_end_ids(struct fsm *dst, const struct fsm *src);
+
+static int
+copy_eager_end_ids(struct fsm *dst, const struct fsm *src);
 
 struct fsm *
 fsm_clone(const struct fsm *fsm)
@@ -77,6 +81,12 @@ fsm_clone(const struct fsm *fsm)
 		}
 
 		if (!copy_end_ids(new, fsm)) {
+			fsm_free(new);
+			return NULL;
+		}
+
+		/* does not copy callback */
+		if (!copy_eager_end_ids(new, fsm)) {
 			fsm_free(new);
 			return NULL;
 		}
@@ -159,3 +169,30 @@ copy_end_ids(struct fsm *dst, const struct fsm *src)
 
 	return env.ok;
 }
+
+static int
+copy_eager_end_ids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
+{
+	struct copy_end_ids_env *env = opaque;
+	assert(env->tag == 'E');
+	if (!fsm_eager_endid_insert_entry(env->dst, from, to, id)) {
+		env->ok = false;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+copy_eager_end_ids(struct fsm *dst, const struct fsm *src)
+{
+	struct copy_end_ids_env env;
+	env.tag = 'E';		/* for 'E'ager endids */
+	env.dst = dst;
+	env.src = src;
+	env.ok = 1;
+
+	fsm_eager_endid_iter_edges_all(src, copy_eager_end_ids_cb, &env);
+	return env.ok;
+}
+

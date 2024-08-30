@@ -5,6 +5,13 @@ append_eager_endid_cb(fsm_end_id_t id, void *opaque)
 {
 	struct cb_info *info = (struct cb_info *)opaque;
 	assert(info->used < MAX_IDS);
+
+	for (size_t i = 0; i < info->used; i++) {
+		if (info->ids[i] == id) {
+			return;	/* already present */
+		}
+	}
+
 	info->ids[info->used++] = id;
 }
 
@@ -28,9 +35,23 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 	for (size_t i = 0; i < MAX_PATTERNS; i++) {
 		const char *p = test->patterns[i];
 		if (test->patterns[i] == NULL) { break; }
-		
+
 		struct fsm *fsm = re_comp(RE_NATIVE, fsm_sgetc, &p, NULL, 0, NULL);
 		assert(fsm != NULL);
+
+		/* Zero is used to terminate expected_ids, so don't use it here. */
+		const fsm_end_id_t endid = (fsm_end_id_t) (i + 1);
+		ret = fsm_seteagerendid(fsm, endid);
+		assert(ret == 1);
+
+		if (log) {
+			fprintf(stderr, "==== source DFA %zd (pre det+min)\\n", i);
+			fsm_dump_dot(stderr, fsm);
+			fsm_eager_endid_dump(stderr, fsm);
+			fprintf(stderr, "====\n");
+		}
+
+		// consolidate_edges
 
 		ret = fsm_determinise(fsm);
 		assert(ret == 1);
@@ -42,27 +63,31 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 
 		/* TODO: assert that it doesn't match the empty string?
 		 * Eager endids will always report true for those, no matter the input. */
-		
-		/* Zero is used to terminate expected_ids, so don't use it here. */
-		const fsm_end_id_t endid = (fsm_end_id_t) (i + 1);
-		ret = fsm_seteagerendid(fsm, endid);
-		assert(ret == 1);
+
+		if (log) {
+			fprintf(stderr, "==== source DFA %zd (post det+min)\\n", i);
+			fsm_dump_dot(stderr, fsm);
+			fsm_eager_endid_dump(stderr, fsm);
+			fprintf(stderr, "====\n");
+		}
 
 		fsms[fsms_used++] = fsm;
 	}
 
+	/* If there's only one pattern this just returns fsms[0]. */
 	struct fsm *fsm = fsm_union_array(fsms_used, fsms, NULL);
 	assert(fsm != NULL);
 
 	if (log) {
-		fprintf(stderr, "==== combined\n");
-		fsm_dump(stderr, fsm);
+		fprintf(stderr, "==== combined (pre det+min)\\n");
+		fsm_dump_dot(stderr, fsm);
+		fsm_eager_endid_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}
 
 	ret = fsm_determinise(fsm);
 	assert(ret == 1);
-	
+
 	if (minimise) {
 		ret = fsm_minimise(fsm);
 		assert(ret == 1);
@@ -70,7 +95,8 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 
 	if (log) {
 		fprintf(stderr, "==== combined (post det+min)\n");
-		fsm_dump(stderr, fsm);
+		fsm_dump_dot(stderr, fsm);
+		fsm_eager_endid_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}
 
@@ -82,7 +108,7 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 		endids.used = 0;
 		const char *input = test->inputs[i_i].input;
 		if (input == NULL) { break; }
-		
+
 		size_t expected_id_count = 0;
 		for (size_t id_i = 0; id_i < MAX_ENDIDS; id_i++) {
 			const fsm_end_id_t id = test->inputs[i_i].expected_ids[id_i];
@@ -111,7 +137,7 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 		} else {
 			assert(ret == 1);
 		}
-		
+
 		/* NEXT match IDs, sort endids[] buffer first */
 		qsort(endids.ids, endids.used, sizeof(endids.ids[0]), cmp_endid);
 
@@ -147,4 +173,3 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 
 	return EXIT_SUCCESS;;
 }
-

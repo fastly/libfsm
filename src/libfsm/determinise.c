@@ -722,13 +722,19 @@ cleanup:
 	return res;
 }
 
+#define LOG_REMAP 0
+#if LOG_REMAP
+#include <fsm/print.h>
+#endif
+
 struct remap_eager_endids_env {
 	bool ok;
 	const struct map *map;
 	struct interned_state_set_pool *issp;
 	struct fsm *dst;
 	const struct fsm *src;
-
+	fsm_state_t src_start;
+	fsm_state_t dst_start;
 };
 
 static bool
@@ -764,6 +770,21 @@ remap_eager_endids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *o
 		fprintf(stderr, "\n");
 	}
 #endif
+
+	/* Live self-edges should only appear on the start state, they represent
+	 * eager endids that match at start. Other self-edges present became
+	 * garbage after epsilon removal, don't carry them on. */
+	if (from == to) {
+		if (from != env->src_start) {
+			return 1; /* discard stale self-edge */
+		}
+		if (!fsm_eager_endid_insert_entry(env->dst,
+			env->dst_start, env->dst_start, id)) {
+			env->ok = false;
+			return 0;
+		}
+		return 1;
+	}
 
 	/* naive implementation. potentially very expensive. rework later. */
 	for (size_t f_i = 0; f_i < map->count; f_i++) { /* from */
@@ -808,11 +829,6 @@ remap_eager_endids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *o
 	return 1;
 }
 
-#define LOG_REMAP 0
-#if LOG_REMAP
-#include <fsm/print.h>
-#endif
-
 /* For every existing eager endid metadata on src_nfa, ee(From, To, Id):
  *
  * For every remapped state F' where From is in the mapping->iss for F'
@@ -831,12 +847,24 @@ remap_eager_endids(const struct map *map, struct interned_state_set_pool *issp,
 	fsm_eager_endid_dump(stderr, src_nfa);
 #endif
 
+	fsm_state_t dst_start;
+	if (!fsm_getstart(dst_dfa, &dst_start)) {
+		return 0;
+	}
+
+	fsm_state_t src_start;
+	if (!fsm_getstart(src_nfa, &src_start)) {
+		return 0;
+	}
+
 	struct remap_eager_endids_env env = {
 		.ok = true,
 		.map = map,
 		.issp = issp,
 		.dst = dst_dfa,
 		.src = src_nfa,
+		.src_start = src_start,
+		.dst_start = dst_start,
 	};
 	fsm_eager_endid_iter_edges_all(src_nfa, remap_eager_endids_cb, &env);
 
