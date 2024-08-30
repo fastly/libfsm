@@ -21,8 +21,6 @@
 
 #define LOG_LEVEL 1
 
-#define EAGER_ENDID_EDGE_FROM_START ((fsm_state_t)-2)
-
 struct eager_endid_info {
 	fsm_eager_endid_cb *cb;
 	void *opaque;
@@ -30,8 +28,14 @@ struct eager_endid_info {
 	/* janky vector impl, replace with something else later */
 	size_t ceil;
 	size_t used;
+
+	/* Edge with an eager endid.
+	 *
+	 * If from == to == the start state, then apply the IDs at the start of
+	 * execution (they are always set), otherwise they must differ.
+	 *  */
 	struct eager_endid_entry {
-		fsm_state_t from; /* or EAGER_ENDID_EDGE_FROM_START */
+		fsm_state_t from;
 		fsm_state_t to;
 		fsm_end_id_t id;
 	} *entries;
@@ -43,6 +47,7 @@ fsm_eager_endid_set_cb(struct fsm *fsm, fsm_eager_endid_cb *cb, void *opaque)
 #if LOG_LEVEL > 2
 	fprintf(stderr, "-- fsm_eager_endid_set_cb %p\n", (void *)fsm);
 #endif
+	assert(fsm != NULL);
 	assert(fsm->eager_endid_info != NULL);
 	fsm->eager_endid_info->cb = cb;
 	fsm->eager_endid_info->opaque = opaque;
@@ -110,7 +115,11 @@ insert_eager_endid_entry(const struct fsm_alloc *alloc, struct eager_endid_info 
 		if (nentries == NULL) {
 			return 0;
 		}
+
+#if LOG_LEVEL > 1
 		fprintf(stderr, "%s: grew %zd -> %zd\n", __func__, info->ceil, nceil);
+#endif
+
 		info->ceil = nceil;
 		info->entries = nentries;
 	}
@@ -136,8 +145,16 @@ int
 fsm_eager_endid_insert_entry(struct fsm *fsm,
     fsm_state_t from, fsm_state_t to, fsm_end_id_t id)
 {
-	if (from == to) {
-#if LOG_LEVEL > 1
+	fsm_state_t start;
+	if (!fsm_getstart(fsm, &start)) {
+		assert(!"no start");
+		return 0;
+	}
+
+	/* FIXME: don't reject self-edges here, reachable self-edges appear in the epsilon closure
+	 * after combining DFAs */
+	if (from == to && from != start && 0) {
+#if LOG_LEVEL > 1 || 1
 		fprintf(stderr, "%s: skipping adding entry (%d -> %d, %d) with self-edge \n",
 		    __func__, from, to, id);
 #endif
@@ -146,7 +163,7 @@ fsm_eager_endid_insert_entry(struct fsm *fsm,
 
 	const int res = insert_eager_endid_entry(fsm->alloc, fsm->eager_endid_info,
 	    from, to, id);
-	if (res && from != EAGER_ENDID_EDGE_FROM_START) {
+	if (res) {
 		assert(from < fsm->statecount);
 		fsm->states[from].has_eager_endids = 1;
 	}
@@ -171,8 +188,8 @@ fsm_seteagerendid(struct fsm *fsm, fsm_end_id_t id)
 	if (fsm_isend(fsm, start)) {
 		/* Special case: The start state is an end, so add
 		 * an edge of <start, start, ID>. This will be the
-		 * only possible self-edge, and should be checked for
-		 * at the start of FSM execution. */
+		 * only possible self-edge in a DFA, and should be
+		 * checked for at the start of FSM execution. */
 		if (!insert_eager_endid_entry(fsm->alloc, fsm->eager_endid_info,
 			start, start, id)) {
 			return 0;
@@ -272,9 +289,7 @@ fsm_eager_endid_iter_edges_all(const struct fsm *fsm,
 		const struct eager_endid_entry *e = &info->entries[i];
 
 #if 1
-		if (e->from != EAGER_ENDID_EDGE_FROM_START) {
-			assert(fsm->states[e->from].has_eager_endids);
-		}
+		assert(fsm->states[e->from].has_eager_endids);
 #endif
 
 		if (!cb(e->from, e->to, e->id, opaque)) { return; }

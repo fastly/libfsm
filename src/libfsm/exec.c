@@ -83,6 +83,34 @@ check_eager_endids_for_edge(const struct fsm *fsm, fsm_state_t from, fsm_state_t
 	fsm_eager_endid_iter_edges_between_states(fsm, from, to, set_for_label_cb, &env);
 }
 
+static int
+match_eager_endids_at_start_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
+{
+	/* HACK update the types here once it's working */
+	(void)from;
+	(void)to;
+	struct check_eager_endids_for_edge_env *env = opaque;
+	env->cb(id, env->opaque);
+	return 1;
+}
+
+static int
+match_eager_endids_at_start(const struct fsm *fsm, fsm_state_t start)
+{
+	/* HACK update the types here once it's working */
+	fsm_eager_endid_cb *cb = NULL;
+	void *opaque = NULL;
+	fsm_eager_endid_get_cb(fsm, &cb, &opaque);
+	struct check_eager_endids_for_edge_env env = {
+		.fsm = fsm,
+		.cb = cb,
+		.opaque = opaque,
+	};
+	fsm_eager_endid_iter_edges_between_states(fsm,
+	    start, start, match_eager_endids_at_start_cb, &env);
+	return 1;
+}
+
 int
 fsm_exec(const struct fsm *fsm,
 	int (*fsm_getc)(void *opaque), void *opaque,
@@ -113,6 +141,7 @@ fsm_exec(const struct fsm *fsm,
 		errno = EINVAL;
 		return -1;
 	}
+	const fsm_state_t start = state;
 
 	for (i = 0; i < capture_count; i++) {
 		captures[i].pos[0] = FSM_CAPTURE_NO_POS;
@@ -129,6 +158,12 @@ fsm_exec(const struct fsm *fsm,
 		fsm_eager_endid_dump(stderr, fsm);
 	}
 #endif
+
+	if (fsm->states[start].has_eager_endids) {
+		if (!match_eager_endids_at_start(fsm, start)) {
+			return 0;
+		}
+	}
 
 	while (c = fsm_getc(opaque), c != EOF) {
 		const fsm_state_t prev_state = state;

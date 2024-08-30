@@ -12,6 +12,7 @@
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
+#include <fsm/print.h>
 
 #include <adt/alloc.h>
 #include <adt/set.h>
@@ -29,7 +30,7 @@
 #define LOG_RM_EPSILONS_CAPTURES 0
 #define DEF_CARRY_ENDIDS_COUNT 2
 
-#define LOG_LEVEL 1
+#define LOG_LEVEL 0
 
 #if LOG_LEVEL > 0
 static bool log_it;
@@ -82,10 +83,13 @@ fsm_remove_epsilons(struct fsm *nfa)
 	struct state_set **eclosures = NULL;
 	fsm_state_t s;
 
+	LOG(2, "%s: starting\n", __func__);
+
 	INIT_TIMERS();
 
-	/* NOCOMMIT */
+#if LOG_LEVEL > 0
 	log_it = getenv("LOG") != NULL;
+#endif
 
 	assert(nfa != NULL);
 
@@ -172,6 +176,7 @@ fsm_remove_epsilons(struct fsm *nfa)
 	 * the last labeled edges) but has to happen before the epsilon-edge state sets are
 	 * removed (because it has to explore those to copy over edge metadata). */
 	if (!remap_eager_endids(nfa, eclosures)) {
+		fprintf(stderr, "%s: remap_eager_endids failed\n", __func__);
 		goto cleanup;
 	}
 
@@ -199,6 +204,7 @@ fsm_remove_epsilons(struct fsm *nfa)
 
 	res = 1;
 cleanup:
+	LOG(2, "%s: finishing\n", __func__);
 	if (eclosures != NULL) {
 		closure_free(eclosures, state_count);
 	}
@@ -237,6 +243,8 @@ struct ee_cache_env {
 			struct ee_state_stack_frame {
 				/* fsm_state_t labeled_edge_from; */
 				fsm_state_t state;
+
+				/* FIXME: is it actually necessary to track this? */
 				unsigned id_count; /* how many IDs were pushed on the data stack */
 			} *frames;
 		} state;
@@ -408,9 +416,12 @@ remap_eager_endids__push_data_stack(struct ee_cache_env *env, fsm_end_id_t id)
 	f->id = id;
 	dstack->used++;
 
-	struct ee_state_stack *sstack = &env->stack.state;
-	assert(sstack->used > 0);
-	sstack->frames[sstack->used - 1].id_count++;
+	/* FIXME: the caller should manage this */
+	if (false) {
+		struct ee_state_stack *sstack = &env->stack.state;
+		assert(sstack->used > 0);
+		sstack->frames[sstack->used - 1].id_count++;
+	}
 
 	return true;
 }
@@ -423,7 +434,10 @@ remap_eager_endids__pop_data_stack(struct ee_cache_env *env, unsigned id_count)
 	}
 
 	struct ee_data_stack *dstack = &env->stack.data;
-	if (dstack->used < id_count) { return false; }
+	if (dstack->used < id_count) {
+		LOG(1, "%s: expected count %d, dstack->used %d\n", __func__, id_count, dstack->used);
+		return false;
+	}
 
 	dstack->used -= id_count;
 	return true;
@@ -444,9 +458,18 @@ push_on_data_stack_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *o
 }
 
 static bool
-remap_eager_endids__push_any_endids_on_epsilon_edge(struct ee_cache_env *env, fsm_state_t from, fsm_state_t to)
+remap_eager_endids__push_any_endids_on_epsilon_edge(struct ee_cache_env *env, fsm_state_t from, fsm_state_t to, size_t *pushed)
 {
+	*pushed = 0;
+	const size_t before = env->stack.data.used;
+
 	fsm_eager_endid_iter_edges_between_states(env->nfa, from, to, push_on_data_stack_cb, env);
+	const size_t after = env->stack.data.used;
+	assert(after >= before);
+	if (env->ok) {
+		*pushed = after - before;
+	}
+
 	return env->ok;
 }
 
@@ -486,9 +509,8 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 	struct state_iter eps_iter;
 	fsm_state_t eps_id;
 
-	LOG(2, "%s: s_id %d\n", __func__, s_id);
-
 	if (LOG_LEVEL > 1) {
+		LOG(2, "//// %s: s_id %d (start of step_for_state)\n", __func__, s_id);
 		fprintf(stderr, "%s: current stacks:\n", __func__);
 		for (size_t i = 0; i < env->stack.state.used; i++) {
 			fprintf(stderr, "-- state %zd: id %d, count %u\n",
@@ -499,6 +521,7 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 		for (size_t i = 0; i < env->stack.data.used; i++) {
 			fprintf(stderr, "-- data %zd: %d\n", i, env->stack.data.frames[i].id);
 		}
+		LOG(2, "////\n");
 	}
 
 	/* Explore each non-visited epsilon edge, pushing any edges with
@@ -523,7 +546,8 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 
 		/* If there is any endid edge metadata on this epsilon edge, save it
 		 * on the stack, so it can be added to labeled edges later. */
-	        if (!remap_eager_endids__push_any_endids_on_epsilon_edge(env, s_id, eps_id)) {
+		size_t pushed;
+	        if (!remap_eager_endids__push_any_endids_on_epsilon_edge(env, s_id, eps_id, &pushed)) {
 			LOG(0, "%s %d: returning false\n", __func__, __LINE__);
 			return false;
 		}
@@ -540,7 +564,10 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 			return false;
 		}
 		assert(popped_s_id == s_id);
+		assert(id_count == 0); /* no longer updated, remove this */
 
+		id_count = pushed;
+		LOG(0, "<<< calling pop_data_stack with %u from line %d, s_id %d, eps_id %d\n", id_count, __LINE__, s_id, eps_id);
 		if (!remap_eager_endids__pop_data_stack(env, id_count)) {
 			LOG(0, "%s %d: returning false\n", __func__, __LINE__);
 			return false;
@@ -575,7 +602,9 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 	}
 
 	if (after_labeled_edge_info != NULL) {
-		LOG(1, "%s: after_labeled_edge_info != NULL, skipping labeled edge checks on %d\n", __func__, s_id);
+		LOG(1 -1, "%s: after_labeled_edge_info != NULL, skipping labeled edge checks on %d\n", __func__, s_id);
+
+		LOG(2, "//// %s: s_id %d (early return from step_for_state)\n", __func__, s_id);
 		return true;
 	}
 
@@ -592,6 +621,10 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 		const fsm_state_t dst = info.to;
 
 		LOG(1, "%s: edge_set_group_iter_next => %d -> dst %d\n", __func__, s_id, dst);
+		if (info.to == s_id) {
+			LOG(1, "%s: skipping self-edge\n", __func__);
+			continue;
+		}
 
 		/* Collect any eager endids associated with this labeled edge on the data stack. */
 		size_t endid_labeled_edges;
@@ -615,7 +648,7 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 				.data_stack_floor = env->stack.data.used,
 			};
 
-			LOG(0, "-- %s: %d is an end state, explore its epsilon closure, labeled_edge { from = %d, to = %d, data_stack_floor = %d } \n",
+			LOG(0, "-- %s: %d is an end state, exploring its epsilon closure, labeled_edge { from = %d, to = %d, data_stack_floor = %d } \n",
 			    __func__, dst, labeled_edge.from, labeled_edge.to, labeled_edge.data_stack_floor);
 
 			if (!remap_eager_endids__step_for_state(env, dst, &labeled_edge)) {
@@ -626,6 +659,7 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 			/* Drop the data stack back to where it was before. */
 			const size_t new_discoveries = env->stack.data.used - labeled_edge.data_stack_floor;
 			LOG(0, "%s: dropping %zd new_discoveries\n", __func__, new_discoveries);
+			LOG(0, "<<< calling pop_data_stack with %zd from line %d, s_id %d\n", new_discoveries, __LINE__, s_id);
 			if (!remap_eager_endids__pop_data_stack(env, new_discoveries)) {
 				LOG(0, "%s %d: returning false\n", __func__, __LINE__);
 				return false;
@@ -651,6 +685,7 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 		}
 
 		/* Drop the data stack back to where it was before. */
+		LOG(0, "<<< calling pop_data_stack with %zd from line %d, s_id %d\n", endid_labeled_edges, __LINE__, s_id);
 		if (!remap_eager_endids__pop_data_stack(env, endid_labeled_edges)) {
 			LOG(0, "%s %d: returning false\n", __func__, __LINE__);
 			return false;
@@ -674,8 +709,48 @@ remap_eager_endids__step_for_state(struct ee_cache_env *env, fsm_state_t s_id,
 		}
 	}
 
+	LOG(2, "//// %s: s_id %d (normal return from step_for_state)\n", __func__, s_id);
 	return true;
 }
+
+struct remap_eager_endids_for_start_env {
+	bool ok;
+	struct fsm *nfa;
+	fsm_state_t start;
+	struct state_set *eclosure;
+
+#define DEF_ADD_START_ENDIDS_CEIL 4
+	struct {
+		size_t ceil;
+		size_t used;
+		fsm_end_id_t *ids;
+	} add;
+};
+
+static int
+remap_eager_endids_for_start_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
+{
+	struct remap_eager_endids_for_start_env *env = opaque;
+
+	if (state_set_contains(env->eclosure, from) && state_set_contains(env->eclosure, to)) {
+		if (env->add.used == env->add.ceil) {
+			const size_t nceil = env->add.ceil == 0
+			    ? DEF_ADD_START_ENDIDS_CEIL : 2*env->add.ceil;
+			fsm_end_id_t *nids = f_realloc(env->nfa->alloc,
+			    env->add.ids, nceil * sizeof(nids[0]));
+			if (nids == NULL) {
+				env->ok = false;
+				return 0;
+			}
+			env->add.ids = nids;
+			env->add.ceil = nceil;
+		}
+		env->add.ids[env->add.used++] = id;
+	}
+
+	return 1;
+}
+
 
 /* This could potentially be integrated into epsilon_closure_single. */
 static int
@@ -693,6 +768,7 @@ remap_eager_endids(struct fsm *nfa, struct state_set **eclosures)
 	uint64_t *ends = NULL;
 	uint64_t *enqueued = NULL;
 	uint64_t *reachable_by_label = NULL;
+	fsm_end_id_t *start_ids = NULL;
 
 	ends = f_calloc(nfa->alloc, state_words, sizeof(ends[0]));
 	if (ends == NULL) { goto cleanup; }
@@ -721,12 +797,12 @@ remap_eager_endids(struct fsm *nfa, struct state_set **eclosures)
 	};
 
 	/* First pass: build edge cache. This avoids a great deal of redundant lookup. */
-	for (fsm_state_t s_id = 0; s_id < state_count; s_id++) {
+	/* FIXME: remove -- no longer used */
+	if (false) for (fsm_state_t s_id = 0; s_id < state_count; s_id++) {
 		const struct fsm_state *s = &nfa->states[s_id];
 		if (!s->has_eager_endids) { continue; }
 
 		fsm_eager_endid_iter_edges_from_state(nfa, s_id, save_edges_cb, &env);
-		if (!env.ok) { goto cleanup; }
 	}
 
 	/* dump cache */
@@ -740,6 +816,36 @@ remap_eager_endids(struct fsm *nfa, struct state_set **eclosures)
 				    s_id, c->edges[i].to, c->edges[i].id);
 			}
 		}
+	}
+
+	/* Special case for the start state -- if there are any actions on epsilon edges
+	 * within the start state's closure, they need to be applied at start. */
+	fsm_state_t start;
+	if (fsm_getstart(nfa, &start)) {
+		struct remap_eager_endids_for_start_env start_env = {
+			.ok = true,
+			.nfa = nfa,
+			.start = start,
+			.eclosure = eclosures[start],
+		};
+		/* collect IDs from the start state's epsilon closure */
+		fsm_eager_endid_iter_edges_all(nfa, remap_eager_endids_for_start_cb, &start_env);
+
+		start_ids = start_env.add.ids; /* for cleanup */
+
+		if (!start_env.ok) {
+			goto cleanup;
+		}
+
+		/* now that iteration is done, add them */
+		for (size_t i = 0; i < start_env.add.used; i++) {
+			if (!fsm_eager_endid_insert_entry(nfa, start, start, start_env.add.ids[i])) {
+				goto cleanup;
+			}
+		}
+	} else {
+		LOG(1, "no start\n");
+		goto cleanup;
 	}
 
 	/* For each state, carry over eager endid edge metadata from its epsilon closure.
@@ -762,16 +868,19 @@ remap_eager_endids(struct fsm *nfa, struct state_set **eclosures)
 		env.start_of_path = s_id;
 
 		if (!remap_eager_endids__push_state_stack(&env, s_id)) {
+			fprintf(stderr, "%s: fail %s:%d\n", __FILE__, __func__, __LINE__);
 			goto cleanup;
 		}
 
 		if (!remap_eager_endids__step_for_state(&env, s_id, NULL)) {
+			fprintf(stderr, "%s: fail %s:%d\n", __FILE__, __func__, __LINE__);
 			goto cleanup;
 		}
 
 		CLEAR_VISITED(nfa, s_id);
 		unsigned count;
 		if (!remap_eager_endids__pop_state_stack(&env, &s_id, &count)) {
+			fprintf(stderr, "%s: fail %s:%d\n", __FILE__, __func__, __LINE__);
 			goto cleanup;
 		}
 
@@ -792,6 +901,10 @@ cleanup:
 	f_free(nfa->alloc, ends);
 	f_free(nfa->alloc, enqueued);
 	f_free(nfa->alloc, reachable_by_label);
+	f_free(nfa->alloc, start_ids);
+
+	f_free(nfa->alloc, env.stack.state.frames);
+	f_free(nfa->alloc, env.stack.data.frames);
 
 	if (cache != NULL) {
 		for (size_t i = 0; i < state_count; i++) {
@@ -1031,10 +1144,6 @@ carry_endids(struct fsm *fsm, struct state_set *states,
 		return 0;
 	}
 	env.ok = 1;
-
-	if (LOG_LEVEL >= 2) {
-		fsm_eager_endid_dump(stderr, fsm);
-	}
 
 	/* collect from states */
 	for (state_set_reset(states, &it); state_set_next(&it, &s); ) {
