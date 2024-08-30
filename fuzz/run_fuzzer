@@ -25,6 +25,11 @@ if [ ! -e "${FUZZER}" ]; then
     exit 1
 fi
 
+if [ -z "${MODE}" ]; then
+    echo "Did you mean to set MODE?"
+    exit 1
+fi
+
 UBSAN_OPTIONS="ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1"
 
 if [ ! -d "${SEEDS}" ]; then
