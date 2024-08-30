@@ -139,6 +139,10 @@ int
 fsm_generate_matches(struct fsm *fsm, size_t max_length,
     fsm_generate_matches_cb *cb, void *opaque)
 {
+	if (!fsm_has(fsm, fsm_isend)) {
+		return 1;	/* no end state -> nothing to do */
+	}
+
 	INIT_TIMERS();
 	TIME(&pre);
 	int res = gen_init_outer(fsm, max_length, cb, opaque, false, 0);
