@@ -1,6 +1,9 @@
 #include "utils.h"
 
 void
+fsm_eager_endid_dump(FILE *f, const struct fsm *fsm);
+
+void
 append_eager_endid_cb(fsm_end_id_t id, void *opaque)
 {
 	struct cb_info *info = (struct cb_info *)opaque;
@@ -23,6 +26,19 @@ cmp_endid(const void *pa, const void *pb)
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
+struct fsm_options print_options = {
+	.consolidate_edges = 1,
+	.comments = 0,
+	.group_edges = 1,
+};
+
+static void
+dump(const struct fsm *fsm)
+{
+	fsm_print(stderr, fsm,
+	    &print_options, NULL, FSM_PRINT_DOT);
+}
+
 int
 run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_endids)
 {
@@ -30,7 +46,13 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 	size_t fsms_used = 0;
 	int ret;
 
-	const bool log = getenv("LOG") != NULL;
+	int log = 0;
+	{
+		const char *logstr = getenv("LOG");
+		if (logstr != NULL) {
+			log = atoi(logstr);
+		}
+	}
 
 	for (size_t i = 0; i < MAX_PATTERNS; i++) {
 		const char *p = test->patterns[i];
@@ -46,7 +68,7 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 
 		if (log) {
 			fprintf(stderr, "==== source DFA %zd (pre det+min)\\n", i);
-			fsm_dump_dot(stderr, fsm);
+			if (log > 1) { dump(fsm); }
 			fsm_eager_endid_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 		}
@@ -66,7 +88,7 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 
 		if (log) {
 			fprintf(stderr, "==== source DFA %zd (post det+min)\\n", i);
-			fsm_dump_dot(stderr, fsm);
+			if (log > 1) { dump(fsm); }
 			fsm_eager_endid_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 		}
@@ -80,22 +102,25 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 
 	if (log) {
 		fprintf(stderr, "==== combined (pre det+min)\\n");
-		fsm_dump_dot(stderr, fsm);
+		if (log > 1) { dump(fsm); }
 		fsm_eager_endid_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}
 
+	fprintf(stderr, "=== determinising combined... NFA has %u states\n", fsm_countstates(fsm));
 	ret = fsm_determinise(fsm);
 	assert(ret == 1);
+	fprintf(stderr, "=== determinising combined...done, DFA has %u states\n", fsm_countstates(fsm));
 
 	if (minimise) {
 		ret = fsm_minimise(fsm);
+		fprintf(stderr, "=== minimised combined...done, DFA has %u states\n", fsm_countstates(fsm));
 		assert(ret == 1);
 	}
 
 	if (log) {
 		fprintf(stderr, "==== combined (post det+min)\n");
-		fsm_dump_dot(stderr, fsm);
+		if (log > 1) { dump(fsm); }
 		fsm_eager_endid_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}

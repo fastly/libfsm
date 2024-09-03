@@ -413,7 +413,7 @@ gen_individual_check_combined_cb(const struct fsm *fsm,
     fsm_state_t end_state, void *opaque);
 
 /* FIXME: what are reasonable defaults here? */
-#define DEF_MAX_STEPS 10000
+#define DEF_MAX_STEPS 100000
 #define DEF_MAX_MATCH_COUNT 1000
 
 void
