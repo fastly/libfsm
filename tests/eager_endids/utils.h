@@ -16,6 +16,7 @@
 #include <fsm/fsm.h>
 #include <fsm/bool.h>
 #include <fsm/pred.h>
+#include <fsm/options.h>
 #include <fsm/print.h>
 #include <fsm/walk.h>
 
