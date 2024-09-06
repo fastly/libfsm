@@ -22,6 +22,7 @@
 #include "capture.h"
 #include "endids.h"
 #include "eager_endid.h"
+#include "eager_output.h"
 
 /* guess for default state allocation */
 #define FSM_DEFAULT_STATEALLOC 128
@@ -41,6 +42,7 @@ free_contents(struct fsm *fsm)
 	fsm_capture_free(fsm);
 	fsm_endid_free(fsm);
 	fsm_eager_endid_free(fsm);
+	fsm_eager_output_free(fsm);
 
 	f_free(fsm->alloc, fsm->states);
 }
@@ -102,6 +104,14 @@ fsm_new_statealloc(const struct fsm_alloc *alloc, size_t statealloc)
 		return NULL;
 	}
 
+	if (!fsm_eager_output_init(new)) {
+		f_free(new->alloc, new->states);
+		f_free(new->alloc, new);
+		fsm_capture_free(new);
+		fsm_endid_free(new);
+		return NULL;
+	}
+
 	return new;
 }
 
@@ -144,6 +154,7 @@ fsm_move(struct fsm *dst, struct fsm *src)
 	dst->capture_info = src->capture_info;
 	dst->endid_info = src->endid_info;
 	dst->eager_endid_info = src->eager_endid_info;
+	dst->eager_output_info = src->eager_output_info;
 
 	f_free(src->alloc, src);
 }

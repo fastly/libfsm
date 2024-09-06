@@ -21,6 +21,7 @@
 #include "internal.h"
 #include "capture.h"
 #include "eager_endid.h"
+#include "eager_output.h"
 
 #define LOG_EXEC 0
 
@@ -111,6 +112,46 @@ match_eager_endids_at_start(const struct fsm *fsm, fsm_state_t start)
 	return 1;
 }
 
+
+
+struct check_eager_outputs_for_state_env {
+	const struct fsm *fsm;
+	fsm_eager_output_cb *cb;
+	void *opaque;
+};
+
+static int
+match_eager_outputs_for_state_cb(fsm_state_t state, fsm_end_id_t id, void *opaque)
+{
+	/* HACK update the types here once it's working */
+	(void)state;
+	struct check_eager_outputs_for_state_env *env = opaque;
+#if LOG_EAGER
+	fprintf(stderr, "%s: state %d, id %d\n", __func__, state, id);
+#endif
+	env->cb(id, env->opaque);
+	return 1;
+}
+
+static int
+match_eager_outputs_for_state(const struct fsm *fsm, fsm_state_t state)
+{
+	/* HACK update the types here once it's working */
+	fsm_eager_output_cb *cb = NULL;
+	void *opaque = NULL;
+	fsm_eager_output_get_cb(fsm, &cb, &opaque);
+	if (cb == NULL) { return 1; } /* nothing to do */
+
+	struct check_eager_outputs_for_state_env env = {
+		.fsm = fsm,
+		.cb = cb,
+		.opaque = opaque,
+	};
+	fsm_eager_output_iter_state(fsm,
+	    state, match_eager_outputs_for_state_cb, &env);
+	return 1;
+}
+
 int
 fsm_exec(const struct fsm *fsm,
 	int (*fsm_getc)(void *opaque), void *opaque,
@@ -159,8 +200,14 @@ fsm_exec(const struct fsm *fsm,
 	}
 #endif
 
-	if (fsm->states[start].has_eager_endids) {
-		if (!match_eager_endids_at_start(fsm, start)) {
+	/* if (fsm->states[start].has_eager_endids) { */
+	/* 	if (!match_eager_endids_at_start(fsm, start)) { */
+	/* 		return 0; */
+	/* 	} */
+	/* } */
+
+	if (fsm->states[start].has_eager_outputs) {
+		if (!match_eager_outputs_for_state(fsm, start)) {
 			return 0;
 		}
 	}
@@ -174,13 +221,24 @@ fsm_exec(const struct fsm *fsm,
 			return 0;
 		}
 
-#if LOG_EAGER
+/* #if LOG_EAGER */
+/* 		fprintf(stderr, "%s: %d -> %d\n", __func__, prev_state, state); */
+/* #endif */
+/* 		if (fsm->states[prev_state].has_eager_endids) { */
+/* 			check_eager_endids_for_edge(fsm, prev_state, state, c); */
+/* 		} */
+		(void)prev_state;
+		(void)check_eager_endids_for_edge;
+		(void)match_eager_endids_at_start;
+
+#if LOG_EAGER > 1
 		fprintf(stderr, "%s: %d -> %d\n", __func__, prev_state, state);
 #endif
-		if (fsm->states[prev_state].has_eager_endids) {
-			check_eager_endids_for_edge(fsm, prev_state, state, c);
+		if (fsm->states[state].has_eager_outputs) {
+			if (!match_eager_outputs_for_state(fsm, state)) {
+				return 0;
+			}
 		}
-
 
 #if LOG_EXEC
 		fprintf(stderr, "fsm_exec: @ %zu, input '%c', new state %u\n",
@@ -189,6 +247,7 @@ fsm_exec(const struct fsm *fsm,
 		offset++;
 	}
 
+	/* FIXME: eager output also counts */
 	if (!fsm_isend(fsm, state)) {
 		return 0;
 	}
@@ -204,4 +263,3 @@ fsm_exec(const struct fsm *fsm,
 	*end = state;
 	return 1;
 }
-

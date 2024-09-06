@@ -24,6 +24,7 @@
 #include "capture.h"
 #include "endids.h"
 #include "eager_endid.h"
+#include "eager_output.h"
 
 #include <ctype.h>
 
@@ -329,6 +330,10 @@ remap_capture_actions(struct map *map, struct interned_state_set_pool *issp,
 
 static int
 remap_eager_endids(const struct map *map, struct interned_state_set_pool *issp,
+	struct fsm *dst_dfa, const struct fsm *src_nfa);
+
+static int
+remap_eager_outputs(const struct map *map, struct interned_state_set_pool *issp,
 	struct fsm *dst_dfa, const struct fsm *src_nfa);
 
 static struct mappingstack *

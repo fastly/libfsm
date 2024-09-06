@@ -20,6 +20,7 @@
 #include "capture.h"
 #include "endids.h"
 #include "eager_endid.h"
+#include "eager_output.h"
 
 #define LOG_CLONE_ENDIDS 0
 
@@ -31,6 +32,9 @@ copy_end_ids(struct fsm *dst, const struct fsm *src);
 
 static int
 copy_eager_end_ids(struct fsm *dst, const struct fsm *src);
+
+static int
+copy_eager_output_ids(struct fsm *dst, const struct fsm *src);
 
 struct fsm *
 fsm_clone(const struct fsm *fsm)
@@ -87,6 +91,11 @@ fsm_clone(const struct fsm *fsm)
 
 		/* does not copy callback */
 		if (!copy_eager_end_ids(new, fsm)) {
+			fsm_free(new);
+			return NULL;
+		}
+
+		if (!copy_eager_output_ids(new, fsm)) {
 			fsm_free(new);
 			return NULL;
 		}
@@ -196,3 +205,30 @@ copy_eager_end_ids(struct fsm *dst, const struct fsm *src)
 	return env.ok;
 }
 
+struct copy_eager_output_ids_env {
+	bool ok;
+	struct fsm *dst;
+};
+
+static int
+copy_eager_output_ids_cb(fsm_state_t state, fsm_output_id_t id, void *opaque)
+{
+	struct copy_eager_output_ids_env *env = opaque;
+	if (!fsm_seteageroutput(env->dst, state, id)) {
+		env->ok = false;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+copy_eager_output_ids(struct fsm *dst, const struct fsm *src)
+{
+	struct copy_eager_output_ids_env env;
+	env.dst = dst;
+	env.ok = true;
+
+	fsm_eager_output_iter_all(src, copy_eager_output_ids_cb, &env);
+	return env.ok;
+}
