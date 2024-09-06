@@ -24,6 +24,7 @@
 #include "capture.h"
 #include "endids.h"
 #include "eager_endid.h"
+#include "eager_output.h"
 
 #define DUMP_EPSILON_CLOSURES 0
 #define DEF_PENDING_CAPTURE_ACTIONS_CEIL 2
@@ -75,6 +76,49 @@ carry_endids(struct fsm *fsm, struct state_set *states,
 static int
 remap_eager_endids(struct fsm *nfa, struct state_set **eclosures);
 
+static void
+mark_states_reachable_by_label(const struct fsm *nfa, uint64_t *reachable_by_label);
+
+struct eager_output_buf {
+#define DEF_EAGER_OUTPUT_BUF_CEIL 8
+	bool ok;
+	const struct fsm_alloc *alloc;
+	size_t ceil;
+	size_t used;
+	fsm_output_id_t *ids;
+};
+
+static bool
+append_eager_output_id(struct eager_output_buf *buf, fsm_output_id_t id)
+{
+	if (buf->used == buf->ceil) {
+		const size_t nceil = buf->ceil == 0 ? DEF_EAGER_OUTPUT_BUF_CEIL : 2*buf->ceil;
+		fsm_output_id_t *nids = f_realloc(buf->alloc, buf->ids, nceil * sizeof(nids[0]));
+		if (nids == NULL) {
+			buf->ok = false;
+			return false;
+		}
+		buf->ids = nids;
+		buf->ceil = nceil;
+	}
+
+	for (size_t i = 0; i < buf->used; i++) {
+		/* avoid duplicates */
+		if (buf->ids[i] == id) { return true; }
+	}
+
+	buf->ids[buf->used++] = id;
+	return true;
+}
+
+static int
+collect_eager_output_ids_cb(fsm_state_t state, fsm_output_id_t id, void *opaque)
+{
+	(void)state;
+	struct eager_output_buf *buf = opaque;
+	return append_eager_output_id(buf, id) ? 1 : 0;
+}
+
 int
 fsm_remove_epsilons(struct fsm *nfa)
 {
@@ -82,6 +126,11 @@ fsm_remove_epsilons(struct fsm *nfa)
 	int res = 0;
 	struct state_set **eclosures = NULL;
 	fsm_state_t s;
+	struct eager_output_buf eager_output_buf = {
+		.ok = true,
+		.alloc = nfa->alloc,
+	};
+	uint64_t *reachable_by_label = NULL;
 
 	LOG(2, "%s: starting\n", __func__);
 
@@ -118,6 +167,17 @@ fsm_remove_epsilons(struct fsm *nfa)
 	}
 #endif
 
+	const size_t state_words = u64bitset_words(state_count);
+	reachable_by_label = f_calloc(nfa->alloc, state_words, sizeof(reachable_by_label[0]));
+	if (reachable_by_label == NULL) { goto cleanup; }
+
+	mark_states_reachable_by_label(nfa, reachable_by_label);
+
+	fsm_state_t start;
+	if (!fsm_getstart(nfa, &start)) {
+		goto cleanup;	/* no start state */
+	}
+
 	for (s = 0; s < state_count; s++) {
 		struct state_iter si;
 		fsm_state_t es_id;
@@ -125,12 +185,18 @@ fsm_remove_epsilons(struct fsm *nfa)
 		struct edge_group_iter egi;
 		struct edge_group_iter_info info;
 
+		/* If the state isn't reachable by a label and isn't the start state,
+		 * skip processing -- it will soon become garbage. */
+		if (!u64bitset_get(reachable_by_label, s) && s != start) {
+			continue;
+		}
+
 		/* Process the epsilon closure. */
 		state_set_reset(eclosures[s], &si);
 		while (state_set_next(&si, &es_id)) {
 			struct fsm_state *es = &nfa->states[es_id];
 
-			/* The current NFA state is an end state if any
+			/* The current NFA state is uan end state if any
 			 * of its associated epsilon-clousure states are
 			 * end states.
 			 *
@@ -153,6 +219,16 @@ fsm_remove_epsilons(struct fsm *nfa)
 				}
 			}
 
+			/* Collect every eager output ID from any state
+			 * in the current state's epsilon closure to the
+			 * current state. These will be added at the end. */
+			{
+				if (fsm_eager_output_has_any(nfa, es_id, NULL)) {
+					fsm_eager_output_iter_state(nfa, es_id, collect_eager_output_ids_cb, &eager_output_buf);
+					if (!eager_output_buf.ok) { goto cleanup; }
+				}
+			}
+
 			/* For every state in this state's transitive
 			 * epsilon closure, add all of their sets of
 			 * labeled edges. */
@@ -168,6 +244,13 @@ fsm_remove_epsilons(struct fsm *nfa)
 				}
 			}
 		}
+
+		for (size_t i = 0; i < eager_output_buf.used; i++) {
+			if (!fsm_seteageroutput(nfa, s, eager_output_buf.ids[i])) {
+				goto cleanup;
+			}
+		}
+		eager_output_buf.used = 0; /* clear */
 	}
 
 	/* Remap edge metadata for eagerly matching endids.
@@ -208,6 +291,8 @@ cleanup:
 	if (eclosures != NULL) {
 		closure_free(eclosures, state_count);
 	}
+	f_free(nfa->alloc, reachable_by_label);
+	f_free(nfa->alloc, eager_output_buf.ids);
 
 	return res;
 }
@@ -756,6 +841,9 @@ remap_eager_endids_for_start_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t i
 static int
 remap_eager_endids(struct fsm *nfa, struct state_set **eclosures)
 {
+#define DROP_EAGER_ENDIDS 1
+	if (DROP_EAGER_ENDIDS) { return 1; }
+
 	if (!fsm_eager_endid_has_eager_endids(nfa)) {
 		return 1;	/* nothing to do */
 	}

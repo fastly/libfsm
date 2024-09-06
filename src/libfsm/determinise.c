@@ -257,6 +257,10 @@ fsm_determinise(struct fsm *nfa)
 			goto cleanup;
 		}
 
+		if (!remap_eager_outputs(&map, issp, dfa, nfa)) {
+			goto cleanup;
+		}
+
 		fsm_move(nfa, dfa);
 	}
 
@@ -2914,5 +2918,53 @@ analyze_closures__grow_outputs(struct analyze_closures_env *env)
 
 	env->outputs = nos;
 	env->output_ceil = nceil;
+	return 1;
+}
+
+struct remap_eager_output_env {
+	bool ok;
+	struct fsm *dst;
+	fsm_state_t dst_state;
+};
+
+static int
+remap_eager_output_cb(fsm_state_t state, fsm_output_id_t id, void *opaque)
+{
+	(void)state;
+	(void)id;
+	struct remap_eager_output_env *env = opaque;
+	if (!fsm_seteageroutput(env->dst, env->dst_state, id)) {
+		env->ok = false;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+remap_eager_outputs(const struct map *map, struct interned_state_set_pool *issp,
+	struct fsm *dst_dfa, const struct fsm *src_nfa)
+{
+	/* For each DFA state, get the set of NFA states corresponding to it from the
+	 * map and issp, then copy every eager output ID over. */
+	struct map_iter iter;
+	for (struct mapping *b = map_first(map, &iter); b != NULL; b = map_next(&iter)) {
+		struct state_set *ss = interned_state_set_get_state_set(issp, b->iss);
+		assert(ss != NULL);
+
+		struct state_iter it;
+		fsm_state_t s;
+		state_set_reset(ss, &it);
+		while (state_set_next(&it, &s)) {
+			struct remap_eager_output_env env = {
+				.ok = true,
+				.dst = dst_dfa,
+				.dst_state = b->dfastate,
+			};
+			fsm_eager_output_iter_state(src_nfa, s, remap_eager_output_cb, &env);
+			if (!env.ok) { return 0; }
+		}
+	}
+
 	return 1;
 }

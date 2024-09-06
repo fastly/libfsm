@@ -62,6 +62,10 @@ struct fsm_state {
 	 * the fsm->eager_endid_info struct. */
 	unsigned int has_eager_endids:1;
 
+	/* If 0, then this state has no need for checking
+	 * the fsm->eager_output_info struct. */
+	unsigned int has_eager_outputs:1;
+
 	struct edge_set *edges;
 	struct state_set *epsilons;
 };
@@ -80,6 +84,7 @@ struct fsm {
 	struct fsm_capture_info *capture_info;
 	struct endid_info *endid_info;
 	struct eager_endid_info *eager_endid_info;
+	struct eager_output_info *eager_output_info;
 };
 
 struct fsm *
