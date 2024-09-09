@@ -208,6 +208,11 @@ fsm_seteageroutput(struct fsm *fsm, fsm_state_t state, fsm_output_id_t id)
 			e = b->entry;
 		}
 
+		/* ignore duplicates */
+		for (size_t i = 0; i < e->used; i++) {
+			if (e->ids[i] == id) { return 1; }
+		}
+
 		e->ids[e->used++] = id;
 		/* fprintf(stderr, "%s: e->ids_used %u\n", __func__, e->used); */
 		fsm->states[state].has_eager_outputs = 1;
