@@ -173,10 +173,12 @@ fsm_exec(const struct fsm *fsm,
 
 	/* TODO: pass struct of callbacks to call during each event; transitions etc */
 
+#if EXPENSIVE_CHECKS
 	if (!fsm_all(fsm, fsm_isdfa)) {
 		errno = EINVAL;
 		return -1;
 	}
+#endif
 
 	if (!fsm_getstart(fsm, &state)) {
 		errno = EINVAL;

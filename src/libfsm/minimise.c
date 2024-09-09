@@ -85,7 +85,9 @@ fsm_minimise(struct fsm *fsm)
 
 	/* This should only be called with a DFA. */
 	assert(fsm != NULL);
+#if EXPENSIVE_CHECKS
 	assert(fsm_all(fsm, fsm_isdfa));
+#endif
 
 	/* The algorithm used below won't remove states without a path
 	 * to an end state, because it cannot prove they're
