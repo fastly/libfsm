@@ -991,7 +991,7 @@ collect_end_ids(const struct fsm *fsm, fsm_state_t s,
 
 #if LOG_ECS
 	fprintf(stderr, "%d:", s);
-	for (size_t i = 0; i < written; i++) {
+	for (size_t i = 0; i < e->count; i++) {
 		fprintf(stderr, " %u", e->ids[i]);
 	}
 	fprintf(stderr, "\n");
