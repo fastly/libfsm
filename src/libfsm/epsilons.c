@@ -145,6 +145,32 @@ fsm_remove_epsilons(struct fsm *nfa)
 
 	assert(nfa != NULL);
 
+	/* FIXME not here either */
+	if (getenv("RMSELF") && fsm_eager_output_has_eager_output(nfa)) {
+		/* for any state that has eager outputs and a self edge, remove the self edge */
+		for (s = 0; s < nfa->statecount; s++) {
+			if (fsm_eager_output_has_any(nfa, s, NULL)) {
+				struct edge_set *edges = nfa->states[s].edges;
+				struct edge_set *new = edge_set_new();
+
+				struct edge_group_iter iter;
+				struct edge_group_iter_info info;
+				edge_set_group_iter_reset(edges, EDGE_GROUP_ITER_ALL, &iter);
+				while (edge_set_group_iter_next(&iter, &info)) {
+					if (info.to != s) {
+						if (!edge_set_add_bulk(&new, nfa->alloc,
+							info.symbols, info.to)) {
+							assert(!"edge_set_add_bulk fail");
+							goto cleanup;
+						}
+					}
+				}
+				edge_set_free(nfa->alloc, edges);
+				nfa->states[s].edges = new;
+			}
+		}
+	}
+
 	TIME(&pre);
 	eclosures = epsilon_closure(nfa);
 	TIME(&post);

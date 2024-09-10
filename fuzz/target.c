@@ -40,7 +40,7 @@ enum run_mode {
 	MODE_DEFAULT,
 	MODE_SHUFFLE_MINIMISE,
 	MODE_ALL_PRINT_FUNCTIONS,
-	MODE_EAGER_ENDIDS,
+	MODE_EAGER_OUTPUT,
 };
 
 
@@ -356,18 +356,18 @@ fuzz_all_print_functions(FILE *f, const char *pattern, bool det, bool min, const
 }
 
 #define MAX_PATTERNS 4
-struct eager_endid_cb_info {
+struct eager_output_cb_info {
 	size_t used;
-	fsm_end_id_t ids[MAX_PATTERNS];
+	fsm_output_id_t ids[MAX_PATTERNS];
 };
 
 static void
-reset_endid_info(struct eager_endid_cb_info *info)
+reset_eager_output_info(struct eager_output_cb_info *info)
 {
 	info->used = 0;
 }
 
-struct fee_env {
+struct feo_env {
 	bool ok;
 	size_t pattern_count;
 	size_t fsm_count;
@@ -381,14 +381,14 @@ struct fee_env {
 	/* which pattern is being used for generation, (size_t)-1 for combined */
 	size_t current_pattern;
 
-	struct eager_endid_cb_info endids;
-	struct eager_endid_cb_info endids_combined;
+	struct eager_output_cb_info outputs;
+	struct eager_output_cb_info outputs_combined;
 };
 
 void
-append_eager_endid_cb(fsm_end_id_t id, void *opaque)
+append_eager_output_cb(fsm_output_id_t id, void *opaque)
 {
-	struct eager_endid_cb_info *info = (struct eager_endid_cb_info *)opaque;
+	struct eager_output_cb_info *info = (struct eager_output_cb_info *)opaque;
 
 	for (size_t i = 0; i < info->used; i++) {
 		if (info->ids[i] == id) {
@@ -417,12 +417,12 @@ gen_individual_check_combined_cb(const struct fsm *fsm,
 #define DEF_MAX_MATCH_COUNT 1000
 
 void
-fsm_eager_endid_dump(FILE *f, const struct fsm *fsm);
+fsm_eager_output_dump(FILE *f, const struct fsm *fsm);
 
 static int
-fuzz_eager_endids(const uint8_t *data, size_t size)
+fuzz_eager_output(const uint8_t *data, size_t size)
 {
-	struct fee_env env = {
+	struct feo_env env = {
 		.ok = true,
 		.pattern_count = 0,
 		.max_steps = DEF_MAX_STEPS,
@@ -515,14 +515,14 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 			continue; /* invalid regex */
 		}
 
-		const fsm_end_id_t endid = (fsm_end_id_t)p_i;
-		ret = fsm_seteagerendid(fsm, endid);
+		const fsm_output_id_t endid = (fsm_output_id_t)p_i;
+		ret = fsm_seteageroutputonends(fsm, endid);
 		assert(ret == 1);
 
 		if (verbose) {
 			fprintf(stderr, "==== pattern %zd, pre det\n", p_i);
 			fsm_dump(stderr, fsm);
-			fsm_eager_endid_dump(stderr, fsm);
+			fsm_eager_output_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 
 			fsm_state_t c = fsm_countstates(fsm);
@@ -542,7 +542,7 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 		if (verbose) {
 			fprintf(stderr, "==== pattern %zd, post det\n", p_i);
 			fsm_dump(stderr, fsm);
-			fsm_eager_endid_dump(stderr, fsm);
+			fsm_eager_output_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 
 			fsm_state_t c = fsm_countstates(fsm);
@@ -551,7 +551,7 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 			}
 		}
 
-		fsm_eager_endid_set_cb(fsm, append_eager_endid_cb, &env.endids);
+		fsm_eager_output_set_cb(fsm, append_eager_output_cb, &env.outputs);
 		env.fsms[env.fsm_count++] = fsm;
 	}
 
@@ -577,7 +577,7 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 			if (verbose) {
 				fprintf(stderr, "==== cp %zd\n", i);
 				fsm_dump(stderr, cp);
-				fsm_eager_endid_dump(stderr, cp);
+				fsm_eager_output_dump(stderr, cp);
 				fprintf(stderr, "====\n");
 
 				fsm_state_t c = fsm_countstates(cp);
@@ -586,7 +586,7 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 				}
 			}
 
-			/* fsm_eager_endid_set_cb(cp, append_eager_endid_cb, &env.endids); */
+			/* fsm_eager_output_set_cb(cp, append_eager_output_cb, &env.outputs); */
 			copies[used++] = cp;
 		}
 
@@ -601,7 +601,7 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 		if (verbose) {
 			fprintf(stderr, "==== combined (pre-det)\n");
 			fsm_dump(stderr, fsm);
-			fsm_eager_endid_dump(stderr, fsm);
+			fsm_eager_output_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 		}
 
@@ -617,12 +617,12 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 
 		LOG("%s: combined state_count %d\n", __func__, fsm_countstates(fsm));
 		env.combined = fsm;
-		/* fsm_eager_endid_set_cb(fsm, append_eager_endid_cb, &env.endids_combined); */
+		/* fsm_eager_output_set_cb(fsm, append_eager_output_cb, &env.outputs_combined); */
 
 		if (verbose) {
 			fprintf(stderr, "==== combined\n");
 			fsm_dump(stderr, env.combined);
-			fsm_eager_endid_dump(stderr, env.combined);
+			fsm_eager_output_dump(stderr, env.combined);
 			fprintf(stderr, "====\n");
 		}
 
@@ -667,23 +667,23 @@ cleanup:
 }
 
 static int
-cmp_endid(const void *pa, const void *pb)
+cmp_output_id(const void *pa, const void *pb)
 {
-	const fsm_end_id_t a = *(fsm_end_id_t *)pa;
-	const fsm_end_id_t b = *(fsm_end_id_t *)pb;
+	const fsm_output_id_t a = *(fsm_output_id_t *)pa;
+	const fsm_output_id_t b = *(fsm_output_id_t *)pb;
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
 static bool
-match_input_get_eager_endids(struct fsm *fsm, const char *input, size_t input_length,
-    struct eager_endid_cb_info *dst)
+match_input_get_eager_outputs(struct fsm *fsm, const char *input, size_t input_length,
+    struct eager_output_cb_info *dst)
 {
 	(void)input_length;
 	fsm_state_t end;
 
-	reset_endid_info(dst);
+	reset_eager_output_info(dst);
 
-	fsm_eager_endid_set_cb(fsm, append_eager_endid_cb, dst);
+	fsm_eager_output_set_cb(fsm, append_eager_output_cb, dst);
 	const int ret = fsm_exec(fsm, fsm_sgetc, &input, &end, NULL);
 	if (ret == 0) {
 		return false; /* no match */
@@ -692,7 +692,7 @@ match_input_get_eager_endids(struct fsm *fsm, const char *input, size_t input_le
 	}
 
 	/* sort the IDs, to make comparison cheaper */
-	qsort(dst->ids, dst->used, sizeof(dst->ids[0]), cmp_endid);
+	qsort(dst->ids, dst->used, sizeof(dst->ids[0]), cmp_output_id);
 	return true;	/* match */
 }
 
@@ -708,47 +708,47 @@ gen_combined_check_individual_cb(const struct fsm *fsm,
 	(void)depth;
 	(void)end_state;
 
-	struct fee_env *env = opaque;
+	struct feo_env *env = opaque;
 	assert(env->current_pattern == (size_t)-1);
 
 	if (match_count > env->max_match_count) { return FSM_GENERATE_MATCHES_CB_RES_HALT; }
 	if (steps > env->max_steps) { return FSM_GENERATE_MATCHES_CB_RES_HALT; }
 
-	/* execute, to set eager endids */
-	if (!match_input_get_eager_endids(env->combined, input, input_length, &env->endids_combined)) {
+	/* execute, to set eager outputs */
+	if (!match_input_get_eager_outputs(env->combined, input, input_length, &env->outputs_combined)) {
 		env->ok = false;
 		return FSM_GENERATE_MATCHES_CB_RES_HALT;
 	}
 
-	size_t individual_endids_used = 0;
-	fsm_end_id_t individual_endids[MAX_PATTERNS];
+	size_t individual_outputs_used = 0;
+	fsm_output_id_t individual_outputs[MAX_PATTERNS];
 
 	for (size_t i = 0; i < env->pattern_count; i++) {
 		struct fsm *fsm = env->fsms[i];
 		if (fsm == NULL) { continue; }
 
-		if (!match_input_get_eager_endids(fsm, input, input_length, &env->endids)) {
+		if (!match_input_get_eager_outputs(fsm, input, input_length, &env->outputs)) {
 			env->ok = false;
 			return FSM_GENERATE_MATCHES_CB_RES_HALT;
 		}
 
-		if (env->endids.used > 0) {
-			assert(env->endids.used == 1);
-			individual_endids[individual_endids_used++] = env->endids.ids[0];
+		if (env->outputs.used > 0) {
+			assert(env->outputs.used == 1);
+			individual_outputs[individual_outputs_used++] = env->outputs.ids[0];
 		}
 	}
 
 	bool match = true;
-	if (env->endids_combined.used != individual_endids_used) {
+	if (env->outputs_combined.used != individual_outputs_used) {
 		match = false;
 	}
 
-	for (size_t cmb_i = 0; cmb_i < env->endids_combined.used; cmb_i++) {
-		const fsm_end_id_t cur = env->endids_combined.ids[cmb_i];
+	for (size_t cmb_i = 0; cmb_i < env->outputs_combined.used; cmb_i++) {
+		const fsm_output_id_t cur = env->outputs_combined.ids[cmb_i];
 		assert(env->fsms[cmb_i] != NULL);
 		bool found = false;
-		for (size_t i = 0; i < individual_endids_used; i++) {
-			if (individual_endids[i] == cur) {
+		for (size_t i = 0; i < individual_outputs_used; i++) {
+			if (individual_outputs[i] == cur) {
 				found = true;
 				break;
 			}
@@ -762,14 +762,14 @@ gen_combined_check_individual_cb(const struct fsm *fsm,
 	if (!match) {
 		fprintf(stderr, "%s: combined <-> individual mismatch for input '%s'(%zd)!\n", __func__, input, input_length);
 
-		fprintf(stderr, "-- combined: %zu IDs:", env->endids_combined.used);
-		for (size_t cmb_i = 0; cmb_i < env->endids_combined.used; cmb_i++) {
-			fprintf(stderr, " %d", env->endids_combined.ids[cmb_i]);
+		fprintf(stderr, "-- combined: %zu IDs:", env->outputs_combined.used);
+		for (size_t cmb_i = 0; cmb_i < env->outputs_combined.used; cmb_i++) {
+			fprintf(stderr, " %d", env->outputs_combined.ids[cmb_i]);
 		}
 		fprintf(stderr, "\n");
-		fprintf(stderr, "-- individiual: %zu IDs:", individual_endids_used);
-		for (size_t i = 0; i < individual_endids_used; i++) {
-			fprintf(stderr, " %d", individual_endids[i]);
+		fprintf(stderr, "-- individiual: %zu IDs:", individual_outputs_used);
+		for (size_t i = 0; i < individual_outputs_used; i++) {
+			fprintf(stderr, " %d", individual_outputs[i]);
 		}
 		fprintf(stderr, "\n");
 		goto fail;
@@ -795,7 +795,7 @@ gen_individual_check_combined_cb(const struct fsm *fsm,
 	(void)depth;
 	(void)end_state;
 
-	struct fee_env *env = opaque;
+	struct feo_env *env = opaque;
 	assert(env->current_pattern < env->pattern_count);
 	if (match_count > env->max_match_count) { return FSM_GENERATE_MATCHES_CB_RES_HALT; }
 	if (steps > env->max_steps) { return FSM_GENERATE_MATCHES_CB_RES_HALT; }
@@ -803,19 +803,19 @@ gen_individual_check_combined_cb(const struct fsm *fsm,
 	struct fsm *cur_fsm = env->fsms[env->current_pattern];
 	if (cur_fsm == NULL) { return FSM_GENERATE_MATCHES_CB_RES_CONTINUE; }
 
-	/* execute, to set eager endids */
-	if (!match_input_get_eager_endids(cur_fsm, input, input_length, &env->endids)) {
+	/* execute, to set eager outputs */
+	if (!match_input_get_eager_outputs(cur_fsm, input, input_length, &env->outputs)) {
 		goto fail;
 	}
-	if (!match_input_get_eager_endids(env->combined, input, input_length, &env->endids_combined)) {
+	if (!match_input_get_eager_outputs(env->combined, input, input_length, &env->outputs_combined)) {
 		goto fail;
 	}
 
-	assert(env->endids.used == 1);
+	assert(env->outputs.used == 1);
 
 	bool found = false;
-	for (size_t i = 0; i < env->endids_combined.used; i++) {
-		if (env->endids_combined.ids[i] == env->endids.ids[0]) {
+	for (size_t i = 0; i < env->outputs_combined.used; i++) {
+		if (env->outputs_combined.ids[i] == env->outputs.ids[0]) {
 			found = true;
 			break;
 		}
@@ -824,14 +824,14 @@ gen_individual_check_combined_cb(const struct fsm *fsm,
 	if (!found) {
 		fprintf(stderr, "%s: combined <-> individual mismatch for input '%s'(%zd)!\n", __func__, input, input_length);
 
-		fprintf(stderr, "-- combined: %zu IDs:", env->endids_combined.used);
-		for (size_t cmb_i = 0; cmb_i < env->endids_combined.used; cmb_i++) {
-			fprintf(stderr, " %d", env->endids_combined.ids[cmb_i]);
+		fprintf(stderr, "-- combined: %zu IDs:", env->outputs_combined.used);
+		for (size_t cmb_i = 0; cmb_i < env->outputs_combined.used; cmb_i++) {
+			fprintf(stderr, " %d", env->outputs_combined.ids[cmb_i]);
 		}
 		fprintf(stderr, "\n");
-		fprintf(stderr, "-- pattern %zd: %zu IDs:", env->current_pattern, env->endids.used);
-		for (size_t i = 0; i < env->endids.used; i++) {
-			fprintf(stderr, " %d", env->endids.ids[i]);
+		fprintf(stderr, "-- pattern %zd: %zu IDs:", env->current_pattern, env->outputs.used);
+		for (size_t i = 0; i < env->outputs.used; i++) {
+			fprintf(stderr, " %d", env->outputs.ids[i]);
 		}
 		fprintf(stderr, "\n");
 		goto fail;
@@ -859,7 +859,7 @@ get_run_mode(void)
 	switch (mode[0]) {
 	case 'm': return MODE_SHUFFLE_MINIMISE;
 	case 'p': return MODE_ALL_PRINT_FUNCTIONS;
-	case 'E': return MODE_EAGER_ENDIDS;
+	case 'E': return MODE_EAGER_OUTPUT;
 	case 'd':
 	default:
 		return MODE_DEFAULT;
@@ -899,8 +899,8 @@ harness_fuzzer_target(const uint8_t *data, size_t size)
 	case MODE_SHUFFLE_MINIMISE:
 		return shuffle_minimise(pattern);
 
-	case MODE_EAGER_ENDIDS:
-		return fuzz_eager_endids(data, size);
+	case MODE_EAGER_OUTPUT:
+		return fuzz_eager_output(data, size);
 
 	case MODE_ALL_PRINT_FUNCTIONS:
 	{
