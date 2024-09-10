@@ -1,10 +1,10 @@
 #include "utils.h"
 
 void
-fsm_eager_endid_dump(FILE *f, const struct fsm *fsm);
+fsm_eager_output_dump(FILE *f, const struct fsm *fsm);
 
 void
-append_eager_endid_cb(fsm_end_id_t id, void *opaque)
+append_eager_output_cb(fsm_output_id_t id, void *opaque)
 {
 	struct cb_info *info = (struct cb_info *)opaque;
 	assert(info->used < MAX_IDS);
@@ -18,11 +18,11 @@ append_eager_endid_cb(fsm_end_id_t id, void *opaque)
 	info->ids[info->used++] = id;
 }
 
-static int
-cmp_endid(const void *pa, const void *pb)
+int
+cmp_output(const void *pa, const void *pb)
 {
-	const fsm_end_id_t a = *(fsm_end_id_t *)pa;
-	const fsm_end_id_t b = *(fsm_end_id_t *)pb;
+	const fsm_output_id_t a = *(fsm_output_id_t *)pa;
+	const fsm_output_id_t b = *(fsm_output_id_t *)pb;
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
@@ -32,7 +32,7 @@ struct fsm_options print_options = {
 	.group_edges = 1,
 };
 
-static void
+void
 dump(const struct fsm *fsm)
 {
 	fsm_print(stderr, fsm,
@@ -40,9 +40,10 @@ dump(const struct fsm *fsm)
 }
 
 int
-run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_endids)
+run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_outputs)
 {
-	struct fsm *fsms[MAX_PATTERNS] = {0};
+	struct fsm_union_entry entries[MAX_PATTERNS] = {0};
+
 	size_t fsms_used = 0;
 	int ret;
 
@@ -50,6 +51,9 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 	{
 		const char *logstr = getenv("LOG");
 		if (logstr != NULL) {
+			if (logstr[0] == 'y') { /* make "y" or "yes" non-zero */
+				logstr = "1";
+			}
 			log = atoi(logstr);
 		}
 	}
@@ -62,14 +66,14 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 		assert(fsm != NULL);
 
 		/* Zero is used to terminate expected_ids, so don't use it here. */
-		const fsm_end_id_t endid = (fsm_end_id_t) (i + 1);
-		ret = fsm_seteagerendid(fsm, endid);
+		const fsm_output_id_t output = (fsm_output_id_t) (i + 1);
+		ret = fsm_seteageroutputonends(fsm, output);
 		assert(ret == 1);
 
 		if (log) {
-			fprintf(stderr, "==== source DFA %zd (pre det+min)\\n", i);
+			fprintf(stderr, "==== source DFA %zd (pre det+min)\n", i);
 			if (log > 1) { dump(fsm); }
-			fsm_eager_endid_dump(stderr, fsm);
+			fsm_eager_output_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 		}
 
@@ -78,32 +82,40 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 		ret = fsm_determinise(fsm);
 		assert(ret == 1);
 
+		if (log) {
+			fprintf(stderr, "==== source DFA %zd (post det)\n", i);
+			if (log > 1) { dump(fsm); }
+			fsm_eager_output_dump(stderr, fsm);
+			fprintf(stderr, "====\n");
+		}
+
 		if (minimise) {
 			ret = fsm_minimise(fsm);
 			assert(ret == 1);
 		}
 
 		/* TODO: assert that it doesn't match the empty string?
-		 * Eager endids will always report true for those, no matter the input. */
+		 * Eager outputs will always report true for those, no matter the input. */
 
 		if (log) {
-			fprintf(stderr, "==== source DFA %zd (post det+min)\\n", i);
+			fprintf(stderr, "==== source DFA %zd (post det+min)\n", i);
 			if (log > 1) { dump(fsm); }
-			fsm_eager_endid_dump(stderr, fsm);
+			fsm_eager_output_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 		}
 
-		fsms[fsms_used++] = fsm;
+		entries[fsms_used++].fsm = fsm;
 	}
 
 	/* If there's only one pattern this just returns fsms[0]. */
-	struct fsm *fsm = fsm_union_array(fsms_used, fsms, NULL);
+	/* struct fsm *fsm = fsm_union_array(fsms_used, fsms, NULL); */
+	struct fsm *fsm = fsm_union_repeated_pattern_group(fsms_used, entries, NULL);
 	assert(fsm != NULL);
 
 	if (log) {
-		fprintf(stderr, "==== combined (pre det+min)\\n");
+		fprintf(stderr, "==== combined (pre det+min)\n");
 		if (log > 1) { dump(fsm); }
-		fsm_eager_endid_dump(stderr, fsm);
+		fsm_eager_output_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}
 
@@ -111,6 +123,13 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 	ret = fsm_determinise(fsm);
 	assert(ret == 1);
 	fprintf(stderr, "=== determinising combined...done, DFA has %u states\n", fsm_countstates(fsm));
+
+	if (log) {
+		fprintf(stderr, "==== combined (post det)\n");
+		if (log > 1) { dump(fsm); }
+		fsm_eager_output_dump(stderr, fsm);
+		fprintf(stderr, "====\n");
+	}
 
 	if (minimise) {
 		ret = fsm_minimise(fsm);
@@ -121,22 +140,21 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 	if (log) {
 		fprintf(stderr, "==== combined (post det+min)\n");
 		if (log > 1) { dump(fsm); }
-		fsm_eager_endid_dump(stderr, fsm);
+		fsm_eager_output_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}
 
-
-	struct cb_info endids = { 0 };
-	fsm_eager_endid_set_cb(fsm, append_eager_endid_cb, &endids);
+	struct cb_info outputs = { 0 };
+	fsm_eager_output_set_cb(fsm, append_eager_output_cb, &outputs);
 
 	for (size_t i_i = 0; i_i < MAX_INPUTS; i_i++) {
-		endids.used = 0;
+		outputs.used = 0;
 		const char *input = test->inputs[i_i].input;
 		if (input == NULL) { break; }
 
 		size_t expected_id_count = 0;
 		for (size_t id_i = 0; id_i < MAX_ENDIDS; id_i++) {
-			const fsm_end_id_t id = test->inputs[i_i].expected_ids[id_i];
+			const fsm_output_id_t id = test->inputs[i_i].expected_ids[id_i];
 			if (id == 0) { break; }
 			expected_id_count++;
 
@@ -163,28 +181,28 @@ run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_en
 			assert(ret == 1);
 		}
 
-		/* NEXT match IDs, sort endids[] buffer first */
-		qsort(endids.ids, endids.used, sizeof(endids.ids[0]), cmp_endid);
+		/* NEXT match IDs, sort outputs[] buffer first */
+		qsort(outputs.ids, outputs.used, sizeof(outputs.ids[0]), cmp_output);
 
 		if (log) {
-			fprintf(stderr, "-- got %zd:", endids.used);
-			for (size_t i = 0; i < endids.used; i++) {
-				fprintf(stderr, " %d", endids.ids[i]);
+			fprintf(stderr, "-- got %zd:", outputs.used);
+			for (size_t i = 0; i < outputs.used; i++) {
+				fprintf(stderr, " %d", outputs.ids[i]);
 			}
 			fprintf(stderr, "\n");
 		}
 
-		if (!allow_extra_endids) {
-			assert(endids.used == expected_id_count);
+		if (!allow_extra_outputs) {
+			assert(outputs.used == expected_id_count);
 		} else {
-			assert(endids.used >= expected_id_count);
+			assert(outputs.used >= expected_id_count);
 		}
 
 		size_t floor = 0;
-		for (size_t exp_i = 0; exp_i < endids.used; exp_i++) {
+		for (size_t exp_i = 0; exp_i < outputs.used; exp_i++) {
 			bool found = false;
-			for (size_t got_i = floor; got_i < endids.used; got_i++) {
-				if (endids.ids[got_i] == test->inputs[i_i].expected_ids[exp_i]) {
+			for (size_t got_i = floor; got_i < outputs.used; got_i++) {
+				if (outputs.ids[got_i] == test->inputs[i_i].expected_ids[exp_i]) {
 					floor = got_i + 1;
 					found = true;
 					break;

@@ -26,22 +26,28 @@
 
 #include <fsm/fsm.h>
 
-#define MAX_PATTERNS 10
+#define MAX_PATTERNS 30
 #define MAX_INPUTS 16
 #define MAX_ENDIDS 8
 
-struct eager_endid_test {
+struct eager_output_test {
 	const char *patterns[MAX_PATTERNS];
 
 	struct {
 		const char *input;
 		/* Terminated by 0. pattern[i] => id of i+1. Must be sorted. */
-		fsm_end_id_t expected_ids[MAX_ENDIDS];
+		fsm_output_id_t expected_ids[MAX_ENDIDS];
 	} inputs[MAX_INPUTS];
 };
 
+void
+append_eager_output_cb(fsm_output_id_t id, void *opaque);
+
 int
-run_test(const struct eager_endid_test *test, bool minimise, bool allow_extra_endids);
+cmp_output(const void *pa, const void *pb);
+
+int
+run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_outputs);
 
 struct cb_info {
 	size_t used;
@@ -49,6 +55,9 @@ struct cb_info {
 };
 
 void
-append_eager_endid_cb(fsm_end_id_t id, void *opaque);
+dump(const struct fsm *fsm);
+
+void
+append_eager_output_cb(fsm_end_id_t id, void *opaque);
 
 #endif

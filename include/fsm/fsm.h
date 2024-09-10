@@ -28,6 +28,9 @@ typedef unsigned int fsm_state_t;
  * original FSM(s) matched when executing a combined FSM. */
 typedef unsigned int fsm_end_id_t;
 
+/* Eager output ID. */
+typedef unsigned int fsm_output_id_t;
+
 #define FSM_END_ID_MAX UINT_MAX
 
 /*
@@ -281,6 +284,24 @@ fsm_increndids(struct fsm * fsm, int delta);
  * */
 int
 fsm_seteagerendid(struct fsm *fsm, fsm_end_id_t id);
+
+/* Set an eager output ID to emit every time the state is entered.
+ * This turns the automata into a Moore machine. */
+int
+fsm_seteageroutput(struct fsm *fsm, fsm_state_t state, fsm_output_id_t id);
+
+/* Set an eager output ID on all current end states. */
+int
+fsm_seteageroutputonends(struct fsm *fsm, fsm_output_id_t id);
+
+/* HACK */
+typedef void
+fsm_eager_output_cb(fsm_output_id_t id, void *opaque);
+void
+fsm_eager_output_set_cb(struct fsm *fsm, fsm_eager_output_cb *cb, void *opaque);
+
+void
+fsm_eager_output_get_cb(const struct fsm *fsm, fsm_eager_output_cb **cb, void **opaque);
 
 /*
  * Find the state (if there is just one), or add epsilon edges from all states,

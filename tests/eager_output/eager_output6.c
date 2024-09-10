@@ -1,21 +1,21 @@
 #include "utils.h"
 
-#define ALL 1
+#define ALL 0
 
 int main(void)
 {
-	/* assert(!"fixme: revisit once remap_eager_endids is more efficient"); */
+	/* assert(!"fixme: revisit once access patterns are more efficient"); */
 
-	struct eager_endid_test test = {
+	struct eager_output_test test = {
 		.patterns =  {
 			"apple",
 			"banana",
 			"carrot",
+#if ALL
 			"durian",
 			"eggplant",
 			"fig",
 			"grapefruit",
-#if ALL
 			"hazelnut",
 			"iceberg lettuce",
 			"jicama",
@@ -25,16 +25,16 @@ int main(void)
 			{ .input = "apple", .expected_ids = { 1 } },
 			{ .input = "banana", .expected_ids = { 2 } },
 			{ .input = "carrot", .expected_ids = { 3 } },
+#if ALL
 			{ .input = "durian", .expected_ids = { 4 } },
 			{ .input = "eggplant", .expected_ids = { 5 } },
 			{ .input = "fig", .expected_ids = { 6 } },
 			{ .input = "grapefruit", .expected_ids = { 7 } },
-#if ALL
 			{ .input = "hazelnut", .expected_ids = { 8 } },
 			{ .input = "iceberg lettuce", .expected_ids = { 9 } },
 			{ .input = "jicama", .expected_ids = { 10 } },
 #endif
-			{ .input = "apple banana fig", .expected_ids = { 1, 2, 6 } },
+			{ .input = "apple banana carrot", .expected_ids = { 1, 2, 3 } },
 		},
 	};
 

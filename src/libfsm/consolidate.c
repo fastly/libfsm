@@ -24,6 +24,8 @@
 #include "internal.h"
 #include "capture.h"
 #include "endids.h"
+#include "eager_endid.h"
+#include "eager_output.h"
 
 #define LOG_MAPPING 0
 #define LOG_CONSOLIDATE_CAPTURES 0
@@ -48,6 +50,14 @@ consolidate_copy_capture_actions(struct fsm *dst, const struct fsm *src,
 
 static int
 consolidate_end_ids(struct fsm *dst, const struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count);
+
+static int
+consolidate_eager_end_ids(struct fsm *dst, const struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count);
+
+static int
+consolidate_eager_output_ids(struct fsm *dst, const struct fsm *src,
     const fsm_state_t *mapping, size_t mapping_count);
 
 static fsm_state_t
@@ -149,6 +159,14 @@ fsm_consolidate(const struct fsm *src,
 			dst_start = mapping[src_start];
 			fsm_setstart(dst, dst_start);
 		}
+	}
+
+	if (!consolidate_eager_end_ids(dst, src, mapping, mapping_count)) {
+		goto cleanup;
+	}
+
+	if (!consolidate_eager_output_ids(dst, src, mapping, mapping_count)) {
+		goto cleanup;
 	}
 
 	f_free(src->alloc, seen);
@@ -263,3 +281,81 @@ consolidate_end_ids(struct fsm *dst, const struct fsm *src,
 
 	return ret;
 }
+
+struct consolidate_eager_end_ids_env {
+	bool ok;
+	struct fsm *dst;
+	const fsm_state_t *mapping;
+	size_t mapping_count;
+};
+
+static int
+consolidate_eager_end_ids_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
+{
+	struct consolidate_eager_end_ids_env *env = opaque;
+	assert(from < env->mapping_count);
+	assert(to < env->mapping_count);
+
+	const fsm_state_t dst_from = env->mapping[from];
+	const fsm_state_t dst_to = env->mapping[to];
+
+	if (!fsm_eager_endid_insert_entry(env->dst,
+		dst_from, dst_to, id)) {
+		env->ok = false;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+consolidate_eager_end_ids(struct fsm *dst, const struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count)
+{
+	struct consolidate_eager_end_ids_env env = {
+		.ok = true,
+		.dst = dst,
+		.mapping = mapping,
+		.mapping_count = mapping_count,
+	};
+	fsm_eager_endid_iter_edges_all(src,
+	    consolidate_eager_end_ids_cb, &env);
+	return env.ok;
+}
+
+struct consolidate_eager_output_ids_env {
+	bool ok;
+	struct fsm *dst;
+	const fsm_state_t *mapping;
+	size_t mapping_count;
+};
+
+static int
+consolidate_eager_output_ids_cb(fsm_state_t state, fsm_output_id_t id, void *opaque)
+{
+	struct consolidate_eager_output_ids_env *env = opaque;
+	assert(state < env->mapping_count);
+	const fsm_state_t dst_state = env->mapping[state];
+
+	if (!fsm_seteageroutput(env->dst, dst_state, id)) {
+		env->ok = false;
+		return 0;
+	}
+
+	return 1;
+}
+
+static int
+consolidate_eager_output_ids(struct fsm *dst, const struct fsm *src,
+    const fsm_state_t *mapping, size_t mapping_count)
+{
+	struct consolidate_eager_output_ids_env env = {
+		.ok = true,
+		.dst = dst,
+		.mapping = mapping,
+		.mapping_count = mapping_count,
+	};
+	fsm_eager_output_iter_all(src, consolidate_eager_output_ids_cb, &env);
+	return env.ok;
+}
+
