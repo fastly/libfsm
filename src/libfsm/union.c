@@ -18,6 +18,9 @@
 
 #include "internal.h"
 
+#include <adt/edgeset.h>
+#include "eager_output.h"
+
 #define LOG_UNION_ARRAY 0
 
 struct fsm *
@@ -205,7 +208,7 @@ fsm_union_repeated_pattern_group(size_t entry_count,
 			return NULL;
 		}
 		const size_t count = fsm_countstates(entries[i].fsm);
-		fprintf(stderr, "%s: entries[%zd].fsm: %zu states\n", __func__, i, count);
+		/* fprintf(stderr, "%s: entries[%zd].fsm: %zu states\n", __func__, i, count); */
 		est_total_states += count;
 	}
 	est_total_states += 4;	/* new start and end, new unanchored start and end loops */
@@ -270,17 +273,53 @@ fsm_union_repeated_pattern_group(size_t entry_count,
 			goto fail;
 		}
 
+		/* When combining these, remove self-edges from any states on the FSMs to be
+		 * combined that also have eager output IDs. We are about to add an epsilon edge
+		 * from each to a shared state that won't have eager output IDs.
+		 *
+		 * Eager output matching should be idempotent, so carrynig it to other reachable
+		 * state is redundant, and it leads to a combinatorial explosion that blows up the
+		 * state count while determinising the combined FSM otherwise.
+		 *
+		 * For example, if /aaa/, /bbb/, and /ccc/ are combined into a DFA that repeats
+		 * the sub-patterns (like `^.*(?:(aaa)|(bbb)|(ccc))+.*$`), the self-edge at each
+		 * eager output state would combine with every reachable state from then on,
+		 * leading to a copy of the whole reachable subgraph colored by every
+		 * combination of eager output IDs: aaa, bbb, ccc, aaa+bbb, aaa+ccc,
+		 * bbb+ccc, aaa+bbb+ccc. Instead of three relatively separate subgraphs
+		 * that set the eager output at their last state, one for each pattern,
+		 * it leads to 8 (2**3) subgraph clusters because it encodes _each
+		 * distinct combination_ in the DFA. This becomes incredibly expensive
+		 * as the combined pattern count increases. */
+#define FILTER_IN_CONCAT 1
+		if ((FILTER_IN_CONCAT || getenv("RMSELF3")) && fsm_eager_output_has_eager_output(fsm)) {
+			/* for any state that has eager outputs and a self edge, remove the self edge */
+			for (fsm_state_t s = 0; s < fsm->statecount; s++) {
+				if (fsm_eager_output_has_any(fsm, s, NULL)) {
+					struct edge_set *edges = fsm->states[s].edges;
+					struct edge_set *new = edge_set_new();
+
+					struct edge_group_iter iter;
+					struct edge_group_iter_info info;
+					edge_set_group_iter_reset(edges, EDGE_GROUP_ITER_ALL, &iter);
+					while (edge_set_group_iter_next(&iter, &info)) {
+						if (info.to != s) {
+							if (!edge_set_add_bulk(&new, fsm->alloc,
+								info.symbols, info.to)) {
+								goto fail;
+							}
+						}
+					}
+					edge_set_free(fsm->alloc, edges);
+					fsm->states[s].edges = new;
+				}
+			}
+		}
+
 		/* call fsm_merge; we really don't care which is which */
 		struct fsm_combine_info combine_info;
 		struct fsm *merged = fsm_merge(res, fsm, &combine_info);
 		if (merged == NULL) { goto fail; }
-
-		fprintf(stderr, "%s: ci: b_a %d, b_b %d, cb_a %d, cb_b %d\n",
-		    __func__,
-		    combine_info.base_a,
-		    combine_info.base_b,
-		    combine_info.capture_base_a,
-		    combine_info.capture_base_b);
 
 		global_start += combine_info.base_a;
 		global_start_loop += combine_info.base_a;
@@ -291,19 +330,6 @@ fsm_union_repeated_pattern_group(size_t entry_count,
 		for (size_t i = 0; i < ends.used; i++) {
 			ends.states[i] += combine_info.base_b;
 		}
-
-		/* determinisation should figure this out */
-#if 0
-		/* every state gets an any edge to the global start, because any unmatched character resets the match */
-		/* FIXME: should this be behind a distinct flag? */
-		if (!entries[fsm_i].anchored_start && !entries[fsm_i].anchored_end) {
-			for (fsm_state_t s_i = 0; s_i < state_count; s_i++) {
-				if (!fsm_addedge_any(res, s_i + combine_info.base_b, global_start)) { goto fail; }
-			}
-		}
-#endif
-
-		/* copy states and metadata from fsm into res, save offsets */
 
 		/* link to start/start_loop and end/end_loop */
 		const fsm_state_t start_src = entries[fsm_i].anchored_start ? global_start : global_start_loop;
@@ -325,12 +351,10 @@ fsm_union_repeated_pattern_group(size_t entry_count,
 	fsm_setstart(res, global_start);
 	fsm_setend(res, global_end, 1);
 
-	/* add loop */
+	/* add loop back to the start, for matching more than one combined sub-pattern */
 	if (!fsm_addedge_epsilon(res, global_end_loop, global_start_loop)) { goto fail; }
 
-
 	/* FIXME: cleanup */
-
 	return res;
 
 fail:

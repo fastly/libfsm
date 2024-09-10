@@ -55,6 +55,33 @@ fsm_determinise(struct fsm *nfa)
 		return 0;
 	}
 
+	/* FIXME not here */
+	if (getenv("RMSELF2") && fsm_eager_output_has_eager_output(nfa)) {
+		/* for any state that has eager outputs and a self edge, remove the self edge */
+		fsm_state_t s;
+		for (s = 0; s < nfa->statecount; s++) {
+			if (fsm_eager_output_has_any(nfa, s, NULL)) {
+				struct edge_set *edges = nfa->states[s].edges;
+				struct edge_set *new = edge_set_new();
+
+				struct edge_group_iter iter;
+				struct edge_group_iter_info info;
+				edge_set_group_iter_reset(edges, EDGE_GROUP_ITER_ALL, &iter);
+				while (edge_set_group_iter_next(&iter, &info)) {
+					if (info.to != s) {
+						if (!edge_set_add_bulk(&new, nfa->alloc,
+							info.symbols, info.to)) {
+							assert(!"edge_set_add_bulk fail");
+							goto cleanup;
+						}
+					}
+				}
+				edge_set_free(nfa->alloc, edges);
+				nfa->states[s].edges = new;
+			}
+		}
+	}
+
 	{
 		fsm_state_t start;
 		interned_state_set_id start_set;
@@ -2929,7 +2956,6 @@ static int
 remap_eager_output_cb(fsm_state_t state, fsm_output_id_t id, void *opaque)
 {
 	(void)state;
-	(void)id;
 	struct remap_eager_output_env *env = opaque;
 	if (!fsm_seteageroutput(env->dst, env->dst_state, id)) {
 		env->ok = false;
