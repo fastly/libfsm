@@ -30,7 +30,7 @@
  * allocator limit, but once the fuzzer finds that it will produce
  * variants of the failure over and over. */
 #ifndef BUILD_FOR_FUZZER
-#define BUILD_FOR_FUZZER 0
+#define BUILD_FOR_FUZZER 1
 #endif
 
 /* If non-zero, expand the timer macros defined below, otherwise
