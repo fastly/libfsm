@@ -477,10 +477,12 @@ fuzz_eager_endids(const uint8_t *data, size_t size)
 					pattern[len] = '\0';
                                         bool keep = true;
 
-                                        for (size_t i = 0; i < len - 1; i++) {
-                                            if (pattern[i] == '\\' && pattern[i + 1] == 'x') {
-                                                /* ignore unhandled parser errors from "\x" */
-                                                keep = false;
+                                        if (len > 0) {
+                                            for (size_t i = 0; i < len - 1; i++) {
+                                                if (pattern[i] == '\\' && pattern[i + 1] == 'x') {
+                                                    /* ignore unhandled parser errors from "\x" */
+                                                    keep = false;
+                                                }
                                             }
                                         }
 
