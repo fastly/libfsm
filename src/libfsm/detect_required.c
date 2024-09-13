@@ -16,6 +16,7 @@
 #include <fsm/walk.h>
 #include <fsm/pred.h>
 
+#include <adt/bitmap.h>
 #include <adt/edgeset.h>
 #include <adt/u64bitset.h>
 
@@ -95,10 +96,11 @@ static void check_symbols(const struct edge_group_iter_info *info, uint16_t *lab
  * edges with only one label that must be followed by all matches), so it can take
  * prohibitively long for large/complex DFAs. */
 enum fsm_detect_required_characters_res
-fsm_detect_required_characters(const struct fsm *dfa, size_t step_limit, struct bm *bitmap)
+fsm_detect_required_characters(const struct fsm *dfa, size_t step_limit,
+    uint64_t output_bitmap[4], size_t *char_count)
 {
 	assert(dfa != NULL);
-	assert(bitmap != NULL);
+	assert(output_bitmap != NULL);
 
 	#if EXPENSIVE_CHECKS
 	if (!fsm_all(dfa, fsm_isdfa)) {
@@ -128,7 +130,7 @@ fsm_detect_required_characters(const struct fsm *dfa, size_t step_limit, struct 
 	}
 	#endif
 
-	bm_clear(bitmap);
+	for (size_t i = 0; i < 4; i++) { output_bitmap[i] = 0; }
 
 	/* If the start state is also an end state, then
 	 * it matches the empty string, so we're done. */
@@ -251,7 +253,13 @@ fsm_detect_required_characters(const struct fsm *dfa, size_t step_limit, struct 
 	}
 
 	res = FSM_DETECT_REQUIRED_CHARACTERS_WRITTEN;
-	bm_copy(bitmap, &env.overall);
+	for (size_t i = 0; i < 4; i++) {
+		const uint64_t *w = bm_nth_word(&env.overall, i);
+		output_bitmap[i] = *w;
+	}
+	if (char_count != NULL) {
+		*char_count = bm_count(&env.overall);
+	}
 
 cleanup:
 	f_free(dfa->alloc, env.stack.frames);

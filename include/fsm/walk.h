@@ -7,7 +7,7 @@
 #ifndef FSM_WALK_H
 #define FSM_WALK_H
 
-#include <adt/bitmap.h>
+#include <stdint.h>
 
 struct fsm;
 struct fsm_state;
@@ -141,10 +141,6 @@ fsm_generate_matches_cb fsm_generate_cb_printf_escaped;
  * check and return ERROR_MISUSE if it is not, otherwise this is an
  * unchecked error.
  *
- * The bitmap will be cleared before populating. Afterward,
- * bm_count(bitmap) will return how many required characters were
- * found.
- *
  * There is an optional step_limit -- if this is reached, then it will
  * return FSM_DETECT_REQUIRED_CHARACTERS_STEP_LIMIT_REACHED and a
  * cleared bitmap, because any partial information could still have been
@@ -157,7 +153,7 @@ enum fsm_detect_required_characters_res {
 };
 enum fsm_detect_required_characters_res
 fsm_detect_required_characters(const struct fsm *dfa, size_t step_limit,
-    struct bm *bitmap);
+    uint64_t bitmap[4], size_t *char_count);
 
 #endif
 
