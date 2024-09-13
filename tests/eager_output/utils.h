@@ -26,8 +26,8 @@
 
 #include <fsm/fsm.h>
 
-#define MAX_PATTERNS 30
-#define MAX_INPUTS 16
+#define MAX_PATTERNS 150
+#define MAX_INPUTS 64
 #define MAX_ENDIDS 8
 
 struct eager_output_test {
@@ -35,6 +35,7 @@ struct eager_output_test {
 
 	struct {
 		const char *input;
+		bool expect_fail;
 		/* Terminated by 0. pattern[i] => id of i+1. Must be sorted. */
 		fsm_output_id_t expected_ids[MAX_ENDIDS];
 	} inputs[MAX_INPUTS];

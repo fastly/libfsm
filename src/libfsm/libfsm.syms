@@ -99,6 +99,7 @@ fsm_increndids
 fsm_seteagerendid
 # debug: should it be added to public API?
 fsm_eager_endid_dump
+fsm_endid_dump
 # short term hack
 fsm_eager_endid_set_cb
 

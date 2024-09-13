@@ -4,6 +4,9 @@ void
 fsm_eager_output_dump(FILE *f, const struct fsm *fsm);
 
 void
+fsm_endid_dump(FILE *f, const struct fsm *fsm);
+
+void
 append_eager_output_cb(fsm_output_id_t id, void *opaque)
 {
 	struct cb_info *info = (struct cb_info *)opaque;
@@ -44,6 +47,8 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 {
 	struct fsm_union_entry entries[MAX_PATTERNS] = {0};
 
+	allow_extra_outputs = false;
+
 	size_t fsms_used = 0;
 	int ret;
 
@@ -61,23 +66,42 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 	for (size_t i = 0; i < MAX_PATTERNS; i++) {
 		const char *p = test->patterns[i];
 		if (test->patterns[i] == NULL) { break; }
+		const size_t len = strlen(p);
+		struct fsm_union_entry *e = &entries[fsms_used];
+
+		/* For sake of these patterns, they are anchored if the first/last
+		 * character is '^' and '$', respectively. This is too simplistic
+		 * for the general case, though. */
+		if (len > 0) {
+			if (p[0] == '^') { e->anchored_start = true; }
+			if (p[len - 1] == '$') { e->anchored_end = true; }
+			/* fprintf(stderr, "%s: p[%zd]: '%s', start %d, end %d\n", */
+			/*     __func__, fsms_used, p, e->anchored_start, e->anchored_end); */
+		}
 
 		struct fsm *fsm = re_comp(RE_NATIVE, fsm_sgetc, &p, NULL, 0, NULL);
 		assert(fsm != NULL);
 
 		/* Zero is used to terminate expected_ids, so don't use it here. */
-		const fsm_output_id_t output = (fsm_output_id_t) (i + 1);
-		ret = fsm_seteageroutputonends(fsm, output);
+		const fsm_output_id_t output_id = (fsm_output_id_t) (i + 1);
+		const fsm_end_id_t end_id = (fsm_end_id_t) (i + 1);
+
+		/* Set either an end ID or an eager output ID, depending on
+		 * whether the fsm is anchored at the end or not. */
+		if (e->anchored_end) {
+			ret = fsm_setendid(fsm, end_id);
+		} else {
+			ret = fsm_seteageroutputonends(fsm, output_id);
+		}
 		assert(ret == 1);
 
 		if (log) {
 			fprintf(stderr, "==== source DFA %zd (pre det+min)\n", i);
 			if (log > 1) { dump(fsm); }
 			fsm_eager_output_dump(stderr, fsm);
+			fsm_endid_dump(stderr, fsm);
 			fprintf(stderr, "====\n");
 		}
-
-		// consolidate_edges
 
 		ret = fsm_determinise(fsm);
 		assert(ret == 1);
@@ -104,7 +128,8 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 			fprintf(stderr, "====\n");
 		}
 
-		entries[fsms_used++].fsm = fsm;
+		e->fsm = fsm;
+		fsms_used++;
 	}
 
 	/* If there's only one pattern this just returns fsms[0]. */
@@ -116,6 +141,8 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 		fprintf(stderr, "==== combined (pre det+min)\n");
 		if (log > 1) { dump(fsm); }
 		fsm_eager_output_dump(stderr, fsm);
+		fprintf(stderr, "--- endids:\n");
+		fsm_endid_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}
 
@@ -141,6 +168,8 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 		fprintf(stderr, "==== combined (post det+min)\n");
 		if (log > 1) { dump(fsm); }
 		fsm_eager_output_dump(stderr, fsm);
+		fprintf(stderr, "--- endids:\n");
+		fsm_endid_dump(stderr, fsm);
 		fprintf(stderr, "====\n");
 	}
 
@@ -170,15 +199,39 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 			for (size_t i = 0; i < expected_id_count; i++) {
 				fprintf(stderr, " %d", test->inputs[i_i].expected_ids[i]);
 			}
-			fprintf(stderr, "\n");
+		}
+
+		if (test->inputs[i_i].expect_fail) {
+			expected_id_count = 0;
 		}
 
 		fsm_state_t end;
 		ret = fsm_exec(fsm, fsm_sgetc, &input, &end, NULL);
-		if (expected_id_count == 0) {
-			assert(ret == 0); /* no match */
-		} else {
-			assert(ret == 1);
+
+		{
+#define ENDID_BUF_SIZE 32
+			fsm_end_id_t endid_buf[ENDID_BUF_SIZE] = {0};
+			const size_t endid_count = fsm_endid_count(fsm, end);
+			/* fprintf(stderr, "%s: endid_count %zd for state %d\n", __func__, endid_count, end); */
+			assert(endid_count < ENDID_BUF_SIZE);
+			if (!fsm_endid_get(fsm, end, /*ENDID_BUF_SIZE*/ endid_count, endid_buf)) {
+				assert(!"fsm_endid_get failed");
+			}
+
+			/* Copy endid outputs into outputs.ids[], since for testing
+			 * purposes we don't care about the difference between eager
+			 * output and endids here -- the values don't overlap. */
+			assert(outputs.used + endid_count <= MAX_IDS);
+			for (size_t endid_i = 0; endid_i < endid_count; endid_i++) {
+				fprintf(stderr, "-- adding endid %zd: %d\n", endid_i, endid_buf[endid_i]);
+				outputs.ids[outputs.used++] = (fsm_output_id_t)endid_buf[endid_i];
+			}
+		}
+
+		if (ret == 0) {
+			/* if it didn't match, ignore the eager output IDs. this should
+			 * eventually happen internal to fsm_exec or codegen. */
+			outputs.used = 0;
 		}
 
 		/* NEXT match IDs, sort outputs[] buffer first */
@@ -190,6 +243,13 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 				fprintf(stderr, " %d", outputs.ids[i]);
 			}
 			fprintf(stderr, "\n");
+		}
+
+		if (expected_id_count == 0) {
+			assert(ret == 0 || outputs.used == 0); /* no match */
+			continue;
+		} else {
+			assert(ret == 1);
 		}
 
 		if (!allow_extra_outputs) {
