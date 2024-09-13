@@ -43,6 +43,7 @@ fsm_addstate(struct fsm *fsm, fsm_state_t *state)
 
 		for (i = fsm->statealloc; i < n; i++) {
 			tmp[i].has_capture_actions = 0;
+			tmp[i].has_eager_outputs = 0;
 		}
 
 		fsm->statealloc = n;
@@ -86,6 +87,8 @@ fsm_addstate_bulk(struct fsm *fsm, size_t n)
 			new->visited  = 0;
 			new->epsilons = NULL;
 			new->edges    = NULL;
+
+			new->has_eager_outputs = 0;
 		}
 
 		fsm->statecount += n;

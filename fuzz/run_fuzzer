@@ -10,6 +10,10 @@ SECONDS=${SECONDS:-60}
 WORKERS=${WORKERS:-4}
 SEEDS=${SEEDS:-seeds}
 
+if [ ${VALGRIND} ]; then
+    VALGRIND=valgrind
+fi
+
 if [ "${1}" = "-h" ]; then
     echo "usage: $0"
     echo " - set these via env: [WORKERS=${WORKERS}] [SECONDS=${SECONDS}] [SEEDS=seed_directory]"
@@ -21,6 +25,11 @@ if [ ! -e "${FUZZER}" ]; then
     exit 1
 fi
 
+if [ -z "${MODE}" ]; then
+    echo "Did you mean to set MODE?"
+    exit 1
+fi
+
 UBSAN_OPTIONS="ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1"
 
 if [ ! -d "${SEEDS}" ]; then
@@ -29,7 +38,7 @@ fi
 
 if [ -z "${ARG}" ]; then
     echo "\n==== ${FUZZER}"
-    exec ${FUZZER} -jobs=${WORKERS} -workers=${WORKERS} -max_total_time=${SECONDS} ${SEEDS}
+    exec ${VALGRIND} ${FUZZER} -jobs=${WORKERS} -workers=${WORKERS} -max_total_time=${SECONDS} ${SEEDS}
 else
-    exec ${FUZZER} ${ARG}
+    exec ${VALGRIND} ${FUZZER} ${ARG}
 fi
