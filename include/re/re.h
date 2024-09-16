@@ -136,6 +136,21 @@ re_comp(enum re_dialect dialect,
 	const struct fsm_alloc *alloc,
 	enum re_flags flags, struct re_err *err);
 
+struct re_anchoring_info {
+	int start;
+	int end;
+	/* FIXME: this could also check for AST_FLAG_NULLABLE, AST_FLAG_UNSATISFIABLE,
+	 * AST_FLAG_ALWAYS_CONSUMES, AST_FLAG_CAN_CONSUME */
+};
+
+/* Parse and analyze the regex enough to determine whether it is
+ * anchored at the start and/or end. Returns 0 if the regex is not
+ * supported, otherwise returns 1 and writes anchoring flags into *info. */
+int
+re_is_anchored(enum re_dialect dialect, re_getchar_fun *f, void *opaque,
+	enum re_flags flags, struct re_err *err,
+	struct re_anchoring_info *info);
+
 /*
  * Return a human-readable string describing a given error code. The string
  * returned has static storage, and must not be freed.
