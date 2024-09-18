@@ -50,7 +50,7 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 	allow_extra_outputs = false;
 
 	size_t fsms_used = 0;
-	int ret;
+	int ret = 0;
 
 	int log = 0;
 	{
@@ -205,10 +205,10 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 			expected_id_count = 0;
 		}
 
-		fsm_state_t end;
+		fsm_state_t end; /* only set on match */
 		ret = fsm_exec(fsm, fsm_sgetc, &input, &end, NULL);
 
-		{
+		if (ret == 1) {
 #define ENDID_BUF_SIZE 32
 			fsm_end_id_t endid_buf[ENDID_BUF_SIZE] = {0};
 			const size_t endid_count = fsm_endid_count(fsm, end);
