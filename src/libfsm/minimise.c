@@ -26,6 +26,7 @@
 #include "internal.h"
 #include "capture.h"
 #include "eager_output.h"
+#include "endids.h"
 
 #define LOG_MAPPINGS 0
 #define LOG_STEPS 0
@@ -133,6 +134,10 @@ fsm_minimise(struct fsm *fsm)
 
 	/* Minimisation should never add states. */
 	assert(minimised_states <= orig_states);
+
+	for (size_t i = 0; i < fsm->statecount; i++) {
+		assert(mapping[i] < fsm->statecount);
+	}
 
 	/* Use the mapping to consolidate the current states
 	 * into a new DFA, combining states that could not be
