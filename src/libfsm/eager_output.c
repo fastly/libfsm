@@ -346,3 +346,58 @@ fsm_eager_output_has_any(const struct fsm *fsm,
 	if (count != NULL) { *count = c; }
 	return c > 0;
 }
+
+int
+fsm_eager_output_compact(struct fsm *fsm, fsm_state_t *mapping, size_t mapping_count)
+{
+	/* Don't reallocate unless something has actually changed. */
+	bool changes = false;
+	for (size_t i = 0; i < mapping_count; i++) {
+		if (mapping[i] != i) {
+			changes = true;
+			break;
+		}
+	}
+
+	/* nothing to do */
+	if (!changes) { return 1; }
+
+	struct eager_output_info *eoi = fsm->eager_output_info;
+
+	struct eager_output_bucket *nbuckets = f_calloc(fsm->alloc,
+	    eoi->htab.bucket_count, sizeof(nbuckets[0]));
+	if (nbuckets == NULL) {
+		return 0;
+	}
+
+	const uint64_t mask = eoi->htab.bucket_count - 1;
+	assert((eoi->htab.bucket_count & mask) == 0);
+
+	for (size_t ob_i = 0; ob_i < eoi->htab.bucket_count; ob_i++) {
+		const struct eager_output_bucket *ob = &eoi->htab.buckets[ob_i];
+		if (ob->entry == NULL) { continue; }
+
+		assert(ob->state < mapping_count);
+		const fsm_state_t nstate = mapping[ob->state];
+		if (nstate == FSM_STATE_REMAP_NO_STATE) { continue; }
+
+		const uint64_t hash = hash_id(nstate);
+
+		bool placed = false;
+		for (size_t probes = 0; probes < eoi->htab.bucket_count; probes++) {
+			const size_t nb_i = (hash + probes) & mask;
+			struct eager_output_bucket *nb = &nbuckets[nb_i];
+			if (nb->entry == NULL) {
+				nb->state = nstate;
+				nb->entry = ob->entry;
+				placed = true;
+				break;
+			}
+		}
+		assert(placed);
+	}
+
+	f_free(fsm->alloc, eoi->htab.buckets);
+	eoi->htab.buckets = nbuckets;
+	return 1;
+}

@@ -19,6 +19,7 @@
 
 #include "internal.h"
 #include "endids.h"
+#include "eager_output.h"
 
 int
 fsm_addstate(struct fsm *fsm, fsm_state_t *state)
@@ -262,6 +263,10 @@ fsm_compact_states(struct fsm *fsm,
 	if (!fsm_endid_compact(fsm, mapping, orig_statecount)) {
 		return 0;
 	}
+	if (!fsm_eager_output_compact(fsm, mapping, orig_statecount)) {
+		return 0;
+	}
+
 	assert(dst == kept);
 	assert(kept == fsm->statecount);
 
