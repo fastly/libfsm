@@ -6,6 +6,8 @@
 
 #include "determinise_internal.h"
 
+#include <fsm/print.h>
+
 static void
 dump_labels(FILE *f, const uint64_t labels[4])
 {
@@ -55,30 +57,10 @@ fsm_determinise(struct fsm *nfa)
 		return 0;
 	}
 
-	/* FIXME not here */
-	if (getenv("RMSELF2") && fsm_eager_output_has_eager_output(nfa)) {
-		/* for any state that has eager outputs and a self edge, remove the self edge */
-		fsm_state_t s;
-		for (s = 0; s < nfa->statecount; s++) {
-			if (fsm_eager_output_has_any(nfa, s, NULL)) {
-				struct edge_set *edges = nfa->states[s].edges;
-				struct edge_set *new = edge_set_new();
-
-				struct edge_group_iter iter;
-				struct edge_group_iter_info info;
-				edge_set_group_iter_reset(edges, EDGE_GROUP_ITER_ALL, &iter);
-				while (edge_set_group_iter_next(&iter, &info)) {
-					if (info.to != s) {
-						if (!edge_set_add_bulk(&new, nfa->alloc,
-							info.symbols, info.to)) {
-							assert(!"edge_set_add_bulk fail");
-							goto cleanup;
-						}
-					}
-				}
-				edge_set_free(nfa->alloc, edges);
-				nfa->states[s].edges = new;
-			}
+	/* FIXME: this seems to be the wrong time to do this */
+	if (fsm_eager_output_has_eager_output(nfa)) {
+		if (!split_eager_output_states_with_self_edges(nfa)) {
+			goto cleanup;
 		}
 	}
 
@@ -2996,4 +2978,154 @@ remap_eager_outputs(const struct map *map, struct interned_state_set_pool *issp,
 	}
 
 	return 1;
+}
+
+#define DEF_SPLIT_CEIL 4
+#define DEF_ENDIDS_CEIL 4
+
+struct split_env {
+	bool ok;
+	struct fsm *nfa;
+
+	struct {
+		size_t ceil;
+		size_t used;
+		fsm_state_t *states;
+	} split;
+
+	struct {
+		size_t ceil;
+		size_t used;
+		fsm_end_id_t *ids;
+	} endids;
+};
+
+static int
+split_collect_endids_cb(fsm_state_t state, const fsm_end_id_t id, void *opaque)
+{
+	(void)state;
+	struct split_env *env = opaque;
+
+	if (env->endids.used == env->endids.ceil) {
+		const size_t nceil = env->endids.ceil == 0
+		    ? DEF_ENDIDS_CEIL
+		    : 2*env->endids.ceil;
+		fsm_end_id_t *nids = f_realloc(env->nfa->alloc,
+		    env->endids.ids, nceil * sizeof(nids[0]));
+		if (nids == NULL) {
+			env->ok = false;
+			return 0;
+		}
+		env->endids.ids = nids;
+		env->endids.ceil = nceil;
+	}
+
+	env->endids.ids[env->endids.used++] = id;
+
+	return 1;
+}
+
+static int
+split_eager_output_states_with_self_edges(struct fsm *nfa)
+{
+	if (getenv("SPLIT") == NULL) { return 1; }
+	fprintf(stderr, "HIT\n");
+
+	int res = 0;
+
+	/* For every state with eager outputs that has a labeled edge to
+	 * self, replace the self-edge with an edge to a new state
+	 * without eager outputs, but with the same outgoing edges and
+	 * other non-eager-output metadata. This ensures the eager
+	 * output only triggers when the state is initially reached,
+	 * rather than potentially repeating over all subsequent input.
+	 *
+	 * This prevents a combinatorial explosion in determinisation,
+	 * where the self-edge on eager output states potentially causes
+	 * them to
+	 * ...
+	 * */
+
+	struct split_env env = { .ok = true };
+
+	const fsm_state_t state_count = fsm_countstates(nfa);
+
+	for (fsm_state_t s_id = 0; s_id < state_count; s_id++) {
+		struct fsm_state *s = &nfa->states[s_id];
+
+		/* This must be called after epsilon removal. */
+		assert(s->epsilons == NULL);
+
+		if (!s->has_eager_outputs) { continue; }
+
+		struct edge_group_iter iter;
+		struct edge_group_iter_info info;
+
+		edge_set_group_iter_reset(s->edges, EDGE_GROUP_ITER_ALL, &iter);
+		while (edge_set_group_iter_next(&iter, &info)) {
+			if (info.to == s_id) {
+				if (env.split.used == env.split.ceil) {
+					const size_t nceil = (env.split.ceil == 0
+					    ? DEF_SPLIT_CEIL
+					    : 2*env.split.ceil);
+					fsm_state_t *nstates = f_realloc(nfa->alloc,
+					    env.split.states, nceil * sizeof(nstates[0]));
+					if (nstates == NULL) { goto cleanup; }
+					env.split.ceil = nceil;
+					env.split.states = nstates;
+				}
+
+				env.split.states[env.split.used++] = s_id;
+			}
+		}
+	}
+
+	for (size_t split_i = 0; split_i < env.split.used; split_i++) {
+		fsm_state_t ns_id;
+		if (!fsm_addstate(nfa, &ns_id)) { goto cleanup; }
+
+		fsm_state_t s_id = env.split.states[split_i];
+		struct fsm_state *s = &nfa->states[s_id];
+		struct fsm_state *ns = &nfa->states[ns_id];
+
+		/* Copy end flag */
+		fsm_setend(nfa, ns_id, fsm_isend(nfa, s_id));
+
+		/* Collect and copy endids */
+		fsm_endid_iter_state(nfa, s_id, split_collect_endids_cb, &env);
+		if (!env.ok) { goto cleanup; }
+		for (size_t i = 0; i < env.endids.used; i++) {
+			if (!fsm_endid_set(nfa, ns_id, env.endids.ids[i])) { goto cleanup; }
+		}
+		env.endids.used = 0;
+
+		/* Do NOT copy s's eager outputs to ns. */
+
+		/* Make two copies of s's edges, but with self-edges to
+		 * s replaced with edges to ns, and set it on s and ns. */
+		struct edge_group_iter iter;
+		struct edge_group_iter_info info;
+		struct edge_set *s_filtered_edges = edge_set_new();
+		struct edge_set *ns_edges = edge_set_new();
+		edge_set_group_iter_reset(s->edges, EDGE_GROUP_ITER_ALL, &iter);
+		while (edge_set_group_iter_next(&iter, &info)) {
+			const fsm_state_t to = info.to == s_id ? ns_id : info.to;
+			if (!edge_set_add_bulk(&s_filtered_edges, nfa->alloc, info.symbols, to)) {
+				goto cleanup;
+			}
+			if (!edge_set_add_bulk(&ns_edges, nfa->alloc, info.symbols, to)) {
+				goto cleanup;
+			}
+		}
+		edge_set_free(nfa->alloc, s->edges);
+		s->edges = s_filtered_edges;
+		ns->edges = ns_edges;
+	}
+
+	res = 1;
+cleanup:
+	f_free(nfa->alloc, env.split.states);
+	f_free(nfa->alloc, env.endids.ids);
+
+	return res;
 }

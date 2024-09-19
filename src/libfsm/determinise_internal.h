@@ -348,4 +348,7 @@ stack_push(struct mappingstack *stack, struct mapping *item);
 static struct mapping *
 stack_pop(struct mappingstack *stack);
 
+static int
+split_eager_output_states_with_self_edges(struct fsm *nfa);
+
 #endif
