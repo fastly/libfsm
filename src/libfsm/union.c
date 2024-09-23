@@ -299,9 +299,9 @@ fsm_union_repeated_pattern_group(size_t entry_count,
 		 * distinct combination_ in the DFA. This becomes incredibly expensive
 		 * as the combined pattern count increases.
 		 *
-		 * FIXME: instead of actively removing these, filter in epsilon removal? */
+		 * FIXME: instead of actively removing these, filter in fsm_determinise? */
 #define FILTER_IN_CONCAT 1
-		if ((FILTER_IN_CONCAT || getenv("RMSELF3")) && fsm_eager_output_has_eager_output(fsm)) {
+		if ((FILTER_IN_CONCAT || getenv("FILTER_IN_CONCAT")) && fsm_eager_output_has_eager_output(fsm)) {
 			/* for any state that has eager outputs and a self edge, remove the self edge */
 			for (fsm_state_t s = 0; s < fsm->statecount; s++) {
 				if (!fsm_eager_output_has_any(fsm, s, NULL)) { continue; }

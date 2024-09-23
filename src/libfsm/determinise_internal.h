@@ -349,6 +349,9 @@ static struct mapping *
 stack_pop(struct mappingstack *stack);
 
 static int
+delete_redundant_any_self_edges(struct fsm *nfa, bool eager_outputs_only);
+
+static int
 split_eager_output_states_with_self_edges(struct fsm *nfa);
 
 #endif

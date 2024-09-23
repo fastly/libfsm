@@ -7,6 +7,7 @@
 #include "determinise_internal.h"
 
 #include <fsm/print.h>
+#include <fsm/options.h>
 
 static void
 dump_labels(FILE *f, const uint64_t labels[4])
@@ -57,8 +58,13 @@ fsm_determinise(struct fsm *nfa)
 		return 0;
 	}
 
-	/* FIXME: this seems to be the wrong time to do this */
+	if (!delete_redundant_any_self_edges(nfa, false)) {
+		goto cleanup;
+	}
+
 	if (fsm_eager_output_has_eager_output(nfa)) {
+
+		/* FIXME: this doesn't quite work */
 		if (!split_eager_output_states_with_self_edges(nfa)) {
 			goto cleanup;
 		}
@@ -2979,6 +2985,127 @@ remap_eager_outputs(const struct map *map, struct interned_state_set_pool *issp,
 
 	return 1;
 }
+
+static bool
+is_any_edge(const uint64_t *labels)
+{
+	for (size_t i = 0; i < 4; i++) {
+		if (labels[i] != 0xffffffffffffffffLLU) { return false; }
+	}
+	return true;
+}
+
+static int
+delete_redundant_any_self_edges(struct fsm *nfa, bool eager_outputs_only)
+{
+	if (getenv("REDUNDANT") == NULL) { return 1; }
+
+	bool changed;
+
+retry:
+	changed = false;
+
+	if (getenv("DOT")) {
+		struct fsm_options print_options = {
+			.consolidate_edges = 1,
+			.comments = 0,
+			.group_edges = 1,
+		};
+
+		fsm_print(stderr, nfa,
+		    &print_options, NULL, FSM_PRINT_DOT);
+	}
+
+	const fsm_state_t state_count = fsm_countstates(nfa);
+
+	for (fsm_state_t s_id = 0; s_id < state_count; s_id++) {
+		struct fsm_state *s = &nfa->states[s_id];
+
+		/* This must be called after epsilon removal. */
+		assert(s->epsilons == NULL);
+
+		if (eager_outputs_only && !s->has_eager_outputs) { continue; }
+
+		bool has_self_any_edge = false;
+		bool next_has_self_any_edge = false;
+
+		struct edge_group_iter iter;
+		struct edge_group_iter_info info;
+
+		/* First pass: check if there's a self-edge, and if so record its labels */
+		edge_set_group_iter_reset(s->edges, EDGE_GROUP_ITER_ALL, &iter);
+		while (edge_set_group_iter_next(&iter, &info)) {
+			if (info.to == s_id && is_any_edge(info.symbols)) {
+				has_self_any_edge = true;
+			}
+		}
+
+		/* If it doesn't have a self edge, we're done with this state */
+		if (!has_self_any_edge) { continue; }
+
+		fprintf(stderr, "%s: checking state with self-edge %d\n", __func__, s_id);
+
+		/* Otherwise, if there's an outgoing edge to a state S1 with labels that are a
+		 * superset of symbols_self AND that state has a self-edge with labels that
+		 * are also a superset of those, then the self-edge on state S1
+		 * eager_is purely redundant and can be removed without affecting
+		 * the overall result -- the redundant edge will just cause a combinatorial
+		 * explosion by leading to two copies of all reachable states, with and without
+		 * the state with the redundant self-edge. */
+		edge_set_group_iter_reset(s->edges, EDGE_GROUP_ITER_ALL, &iter);
+		while (edge_set_group_iter_next(&iter, &info)) {
+			if (info.to == s_id) { continue; }
+
+			if (!is_any_edge(info.symbols)) { continue; }
+
+			const fsm_state_t s2_id = info.to;
+
+			/* check if s_id2 has a self-edge that is also a subset of symbols_self */
+			struct fsm_state *s2 = &nfa->states[s2_id];
+			struct edge_group_iter iter2;
+			struct edge_group_iter_info info2;
+			edge_set_group_iter_reset(s2->edges, EDGE_GROUP_ITER_ALL, &iter2);
+			while (edge_set_group_iter_next(&iter2, &info2)) {
+				if (info2.to == s2_id && is_any_edge(info2.symbols)) {
+					fprintf(stderr, "%s: next_state %d next_has_self_any_edge\n", __func__, s2_id);
+					next_has_self_any_edge = true;
+					break;
+				}
+			}
+
+			if (next_has_self_any_edge) { break; }
+		}
+
+		/* If so, delete the self-edge on s, it's redundant. */
+		if (next_has_self_any_edge) {
+			struct edge_set *filtered_edges = edge_set_new();
+			edge_set_group_iter_reset(s->edges, EDGE_GROUP_ITER_ALL, &iter);
+
+			while (edge_set_group_iter_next(&iter, &info)) {
+				/* skip the self-edge */
+				if (info.to == s_id) {
+					fprintf(stderr, "%s: dropping self-edge on %d\n", __func__, s_id);
+					continue;
+				}
+				if (!edge_set_add_bulk(&filtered_edges, nfa->alloc, info.symbols, info.to)) {
+					return 0;
+				}
+				changed = true;
+			}
+
+			edge_set_free(nfa->alloc, s->edges);
+			s->edges = filtered_edges;
+		}
+	}
+
+	if (changed) {
+		fprintf(stderr, "changed, repeating\n");
+		goto retry;
+	}
+
+	return 1;
+}
+
 
 #define DEF_SPLIT_CEIL 4
 #define DEF_ENDIDS_CEIL 4
