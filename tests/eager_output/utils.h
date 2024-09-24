@@ -59,6 +59,9 @@ void
 dump(const struct fsm *fsm);
 
 void
+codegen(FILE *f, const struct fsm *fsm);
+
+void
 append_eager_output_cb(fsm_end_id_t id, void *opaque);
 
 #endif

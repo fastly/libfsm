@@ -29,7 +29,7 @@ cmp_output(const void *pa, const void *pb)
 	return a < b ? -1 : a > b ? 1 : 0;
 }
 
-struct fsm_options print_options = {
+struct fsm_options dump_options = {
 	.consolidate_edges = 1,
 	.comments = 0,
 	.group_edges = 1,
@@ -39,7 +39,24 @@ void
 dump(const struct fsm *fsm)
 {
 	fsm_print(stderr, fsm,
-	    &print_options, NULL, FSM_PRINT_DOT);
+	    &dump_options, NULL, FSM_PRINT_DOT);
+}
+
+struct fsm_options codegen_options = {
+	.consolidate_edges = 1,
+	.comments = 1,
+	.group_edges = 1,
+
+	.fragment = 1,
+	.case_ranges = 1,
+	.ambig = AMBIG_MULTIPLE,
+};
+
+void
+codegen(FILE *f, const struct fsm *fsm)
+{
+	fsm_print(f, fsm,
+	    &codegen_options, NULL, FSM_PRINT_C);
 }
 
 int
@@ -270,6 +287,10 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 			}
 			assert(found);
 		}
+	}
+
+	if (getenv("CODEGEN")) {
+		codegen(stdout, fsm);
 	}
 
         fsm_free(fsm);
