@@ -20,7 +20,6 @@
 
 #include "internal.h"
 #include "capture.h"
-#include "eager_endid.h"
 #include "eager_output.h"
 
 #define LOG_EXEC 0
@@ -46,73 +45,6 @@ transition(const struct fsm *fsm, fsm_state_t state, int c,
 
 	return 1;
 }
-
-struct check_eager_endids_for_edge_env {
-	const struct fsm *fsm;
-	fsm_eager_endid_cb *cb;
-	void *opaque;
-};
-
-static int
-set_for_label_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
-{
-	/* HACK update the types here once it's working */
-
-	(void)from;
-	(void)to;
-	struct check_eager_endids_for_edge_env *env = opaque;
-	env->cb(id, env->opaque);
-	return 1;
-}
-
-static void
-check_eager_endids_for_edge(const struct fsm *fsm, fsm_state_t from, fsm_state_t to, int label)
-{
-	fsm_eager_endid_cb *cb = NULL;
-	void *opaque = NULL;
-
-	/* FIXME: this isn't specific to the label set. maybe it should be? */
-	(void)label;
-
-	fsm_eager_endid_get_cb(fsm, &cb, &opaque);
-
-	struct check_eager_endids_for_edge_env env = {
-		.fsm = fsm,
-		.cb = cb,
-		.opaque = opaque,
-	};
-	fsm_eager_endid_iter_edges_between_states(fsm, from, to, set_for_label_cb, &env);
-}
-
-static int
-match_eager_endids_at_start_cb(fsm_state_t from, fsm_state_t to, fsm_end_id_t id, void *opaque)
-{
-	/* HACK update the types here once it's working */
-	(void)from;
-	(void)to;
-	struct check_eager_endids_for_edge_env *env = opaque;
-	env->cb(id, env->opaque);
-	return 1;
-}
-
-static int
-match_eager_endids_at_start(const struct fsm *fsm, fsm_state_t start)
-{
-	/* HACK update the types here once it's working */
-	fsm_eager_endid_cb *cb = NULL;
-	void *opaque = NULL;
-	fsm_eager_endid_get_cb(fsm, &cb, &opaque);
-	struct check_eager_endids_for_edge_env env = {
-		.fsm = fsm,
-		.cb = cb,
-		.opaque = opaque,
-	};
-	fsm_eager_endid_iter_edges_between_states(fsm,
-	    start, start, match_eager_endids_at_start_cb, &env);
-	return 1;
-}
-
-
 
 struct check_eager_outputs_for_state_env {
 	const struct fsm *fsm;
@@ -195,19 +127,6 @@ fsm_exec(const struct fsm *fsm,
 	fprintf(stderr, "fsm_exec: starting at %d\n", state);
 #endif
 
-#if LOG_EAGER
-	if (fsm_eager_endid_has_eager_endids(fsm)) {
-		fprintf(stderr, "%s: HAS EAGER ENDIDS\n", __func__);
-		fsm_eager_endid_dump(stderr, fsm);
-	}
-#endif
-
-	/* if (fsm->states[start].has_eager_endids) { */
-	/* 	if (!match_eager_endids_at_start(fsm, start)) { */
-	/* 		return 0; */
-	/* 	} */
-	/* } */
-
 	if (fsm->states[start].has_eager_outputs) {
 		if (!match_eager_outputs_for_state(fsm, start)) {
 			return 0;
@@ -215,7 +134,6 @@ fsm_exec(const struct fsm *fsm,
 	}
 
 	while (c = fsm_getc(opaque), c != EOF) {
-		const fsm_state_t prev_state = state;
 		if (!transition(fsm, state, c, offset, captures, &state)) {
 #if LOG_EXEC
 			fprintf(stderr, "fsm_exec: edge not found\n");
@@ -223,19 +141,6 @@ fsm_exec(const struct fsm *fsm,
 			return 0;
 		}
 
-/* #if LOG_EAGER */
-/* 		fprintf(stderr, "%s: %d -> %d\n", __func__, prev_state, state); */
-/* #endif */
-/* 		if (fsm->states[prev_state].has_eager_endids) { */
-/* 			check_eager_endids_for_edge(fsm, prev_state, state, c); */
-/* 		} */
-		(void)prev_state;
-		(void)check_eager_endids_for_edge;
-		(void)match_eager_endids_at_start;
-
-#if LOG_EAGER > 1
-		fprintf(stderr, "%s: %d -> %d\n", __func__, prev_state, state);
-#endif
 		if (fsm->states[state].has_eager_outputs) {
 			if (!match_eager_outputs_for_state(fsm, state)) {
 				return 0;
@@ -249,7 +154,6 @@ fsm_exec(const struct fsm *fsm,
 		offset++;
 	}
 
-	/* FIXME: eager output also counts */
 	if (!fsm_isend(fsm, state)) {
 		return 0;
 	}
