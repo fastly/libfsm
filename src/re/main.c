@@ -124,6 +124,7 @@ lang_name(const char *name, enum fsm_print_lang *fsm_lang, enum ast_print_lang *
 		{ "rust",       FSM_PRINT_RUST       },
 		{ "sh",         FSM_PRINT_SH         },
 		{ "vmc",        FSM_PRINT_VMC        },
+		{ "cdata",      FSM_PRINT_CDATA      },
 
 		{ "vmdot",      FSM_PRINT_VMDOT      },
 		{ "vmops_c",    FSM_PRINT_VMOPS_C    },
@@ -1047,7 +1048,7 @@ main(int argc, char *argv[])
 	}
 
 	if (generate_bounds > 0) {
-		if (!fsm_generate_matches(fsm, generate_bounds, fsm_generate_cb_printf_escaped, &opt)) {
+		if (!fsm_generate_matches(fsm, generate_bounds, 0, fsm_generate_cb_printf_escaped, &opt)) {
 			exit(EXIT_FAILURE);
 		}
 
