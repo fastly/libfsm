@@ -37,6 +37,8 @@ enum fsm_print_lang {
 	FSM_PRINT_VMC,        /* ISO C90 code, VM style */
 	FSM_PRINT_VMDOT,      /* Graphviz Dot format, showing VM opcodes */
 
+	FSM_PRINT_CDATA,      /* C data tables and small interpreter */
+
 	FSM_PRINT_VMOPS_C,    /* VM opcodes as a datastructure */
 	FSM_PRINT_VMOPS_H,
 	FSM_PRINT_VMOPS_MAIN
