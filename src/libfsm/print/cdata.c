@@ -163,7 +163,7 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	    "\t\t\tbool end;\n",
 	    prefix, prefix, prefix, prefix, prefix);
 
-	fprintf(f, "\t\t\t%s dst_table_offset;\n", id_type_str(config->t_state_id));
+	fprintf(f, "\t\t\t%s dst_table_offset;\n", id_type_str(config->t_dst_state_offset));
 
 	if (config->endid_count > 0) {
 		fprintf(f, "\t\t\t%s endid_offset;\n", id_type_str(config->t_endid_offset));
@@ -798,13 +798,22 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 		}
 	}
 
-	config->t_state_id = size_needed(config->state_count);
+	/* Get the smallest numeric type that will fit all state IDs in
+	 * the current DFA, reserving one extra to use as an out-of-band
+	 * "NONE" value for fields like default_dst. These also the values
+	 * in the dst_state table (the destination state for every edge group),
+	 * so storing them more densely has a big impact on the overall data size. */
+	config->t_state_id = size_needed(config->state_count + 1);
+
+	/* Offset into the dst_state table. */
 	config->t_dst_state_offset = size_needed(config->non_default_edge_count);
 
 	/* These two add the state count to handle the worst-case where every state
-	 * after the first needs a 0 terminator. See the comment for endids_prev above. */
-	config->t_endid_offset = size_needed(config->endid_count + config->state_count);
-	config->t_eager_output_offset = size_needed(config->eager_output_count + config->state_count);
+	 * after the first needs a 0 terminator. See the comment for endids_prev above.
+	 * Both of these also ensure there's space for at least one out-of-band value
+	 * to use as "NONE". */
+	config->t_endid_offset = size_needed(config->endid_count + config->state_count + 1);
+	config->t_eager_output_offset = size_needed(config->eager_output_count + config->state_count + 1);
 
 	/* The caller expects this to be unsigned, and the current interface just sets
 	 * a pointer to the array of IDs. */
