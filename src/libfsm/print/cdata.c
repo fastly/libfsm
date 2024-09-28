@@ -94,75 +94,46 @@ struct cdata_config {
 	enum id_type t_eager_output_value;
 };
 
-/* TODO: move comments over */
-#if 0
-typedef uint32_t prefix_cdata_state;
-#define NO_DEFAULT ((uint32_t)-1)
-
-struct prefix_cdata_dfa {
-	prefix_cdata_state start;
-	struct prefix_cdata_state {
-		/* which labels have non-default edges */
-		uint64_t labels[256/4];
-		prefix_cdata_state default_dst; /* NO_DEFAULT -> match failure */
-
-		/* popcount sum at end of labels[i], so finding the edge offset for
-		 * only needs to popcount labels[label/64] masked */
-		uint8_t rank[3];
-
-		bool end;	/* end state? */
-
-		size_t dst_table_offset; /* where the offsets start */
-
-		/* Offsets into endid and eager output tables. The total table
-		 * size is known, and this struct exists for each state, so
-		 * ideally emit e.g. uint16_t rather than size_t when possible! */
-		uint16_t endid_offset;
-		uint16_t eager_output_offset;
-	} states[MAX_STATE];  // MAX_STATE is known at compile-time
-
-	/* For a state s, the state's edges start at S->dst_table_offset,
-	 * for every bit set in s->labels[] there is a destination state.
-	 * Self-edges are explicitly encoded here. */
-	prefix_cdata_state dst_table[EDGE_COUNT]; /* EDGE_COUNT is known at compile-time */
-
-	/* endids: a table representing the set of endIDs.
-	 * This is a flat array of ascending end IDs, with each run terminated
-	 * by the first non-ascending value.
-	 *
-	 * ENDID_COUNT and EAGER_OUTPUT_COUNT are known at compile time. */
-	uint_that_fits_whatever_the_max_endid_is_t endid_table[ENDID_COUNT];
-	uint_that_fits_whatever_the_max_eager_output_is_t eager_output_table[EAGER_OUTPUT_COUNT];
-};
-#endif
-
 static bool
 generate_struct_definition(FILE *f, const struct cdata_config *config, bool comments, const char *prefix)
 {
 	fprintf(f,
-	    "\ttypedef %s %s_cdata_state;\n"
-	    "#define %s_NO_DEFAULT_STATE ((%s_cdata_state)-1)\n",
-	    id_type_str(config->t_state_id),
-	    prefix, prefix, prefix);
+	    "\ttypedef %s %s_cdata_state;\n",
+	    id_type_str(config->t_state_id), prefix);
 
-	/* TODO: comments */
 	(void)comments;
-
 	/* TODO: move .end and .endid_offset into a separate table, they aren't accessed
 	 * until the end of input. Do this once there's baseline timing info. */
 	fprintf(f,
 	    "\tstruct %s_cdata_dfa {\n"
 	    "\t\t%s_cdata_state start;\n"
 	    "\t\tstruct %s_cdata_state {\n"
-	    "\t\t\t%s_cdata_state default_dst; /* or %s_NO_DEFAULT_STATE */\n"
-	    "\t\t\t/* which labels have non-default edges */\n"
-	    "\t\t\tuint64_t labels[256/4];\n"
-	    "\t\t\tuint64_t label_group_starts[256/4];\n"
-	    "\t\t\tuint8_t rank_sums[4]; /* sum as of end of label_group_starts[n] */\n"
-	    "\n"
-	    "\t\t\tbool end;\n",
-	    prefix, prefix, prefix, prefix, prefix);
+	    "\t\t\tbool end; /* is this an end state? */\n"
+	    "\n", prefix, prefix, prefix);
 
+	if (comments) {
+		fprintf(f,
+		    "\t\t\t/* To find the destination state for label character C,\n"
+		    "\t\t\t * check if the bit C is set in .labels[]. If so, find the\n"
+		    "\t\t\t * first 1 bit <= C in .label_group_starts[]. If that's the\n"
+		    "\t\t\t * Nth '1' bit, then the destination state will be in\n"
+		    "\t\t\t * .dst_table[.dst_table_offset + N]. This bit count is called\n"
+		    "\t\t\t * the rank, and .rank_sums has precomputed sums for each\n"
+		    "\t\t\t * word preceding .label_group_starts[C/64]. If .labels[]\n"
+		    "\t\t\t * isn't set for C, the destination is .default_dst, or the\n"
+		    "\t\t\t * state count (%zu) for no match. */\n"
+		    "\n", config->state_count);
+	}
+	fprintf(f,
+	    "\t\t\t%s_cdata_state default_dst; /* or %zu for NONE */\n"
+	    "\t\t\tuint64_t labels[256/4]; /* which labels have non-default edges */\n"
+	    "\t\t\tuint64_t label_group_starts[256/4]; /* start of each label group */\n"
+	    "\t\t\tuint8_t rank_sums[4]; /* rank at end of label_group_starts[n] */\n"
+	    "\n", prefix, config->state_count);
+
+	if (comments) {
+		fprintf(f, "\t\t\t/* Offsets into values in other tables */\n");
+	}
 	fprintf(f, "\t\t\t%s dst_table_offset;\n", id_type_str(config->t_dst_state_offset));
 
 	if (config->endid_count > 0) {
@@ -174,13 +145,27 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 
 	fprintf(f,
 	    "\t\t} states[%zd];\n"
-	    "\n"
+	    "\n", config->state_count);
+
+	if (comments) {
+		fprintf(f,
+		    "\t\t/* Destination states for each edge group in each state,\n"
+		    "\t\t * starting from .states[state_id].dst_state_offset. */\n");
+	}
+	fprintf(f,
 	    "\t\t%s_cdata_state dst_table[%zd];\n",
-	    config->state_count, prefix, config->non_default_edge_count);
+	    prefix, config->non_default_edge_count);
 
 	if (config->endid_count > 0) {
 		/* FIXME: determine exact size after interning, then avoid padding with
 		 * state_count here. */
+		if (comments) {
+			fprintf(f,
+			    "\n"
+			    "\t\t/* Ascending runs of endids, refered to\n"
+			    "\t\t * by .states[state_id].endid_offset,\n"
+			    "\t\t * terminated by non-increasing value. */\n");
+		}
 		fprintf(f, "\t\t%s endid_table[%zd + 1 + %zd];\n",
 		    id_type_str(config->t_endid_value), config->endid_count, config->state_count);
 	}
@@ -188,6 +173,13 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	if (config->eager_output_count > 0) {
 		/* FIXME: determine exact size after interning, then avoid padding with
 		 * state_count here. */
+		if (comments) {
+			fprintf(f,
+			    "\n"
+			    "\t\t/* Ascending runs of eager_outputs, refered to\n"
+			    "\t\t * by .states[state_id].eager_output_offset,\n"
+			    "\t\t * terminated by non-increasing value. */\n");
+		}
 		fprintf(f, "\t\t%s eager_output_table[%zd + 1 + %zd];\n",
 		    id_type_str(config->t_eager_output_value), config->eager_output_count, config->state_count);
 	}
@@ -227,7 +219,8 @@ cmp_outgoing(const void *pa, const void *pb)
 
 static bool
 save_groups(size_t group_count, const struct ir_group *groups,
-    struct dst_buf *edges, uint64_t *labels, uint64_t *label_group_starts, uint8_t *rank_sums) {
+	struct dst_buf *edges, uint64_t *labels, uint64_t *label_group_starts, uint8_t *rank_sums)
+{
 	/* Convert the group ranges to bitsets and an edge->destination state list. */
 #define DUMP_GROUP 0
 	if (DUMP_GROUP) {
@@ -345,7 +338,7 @@ append_eager_output(struct eager_output_buf *buf, uint64_t id)
 
 static bool
 generate_data(FILE *f, const struct cdata_config *config,
-    const char *prefix, const struct ir *ir)
+	bool comments, const char *prefix, const struct ir *ir)
 {
 	(void)f;
 	(void)config;
@@ -472,6 +465,8 @@ generate_data(FILE *f, const struct cdata_config *config,
 		}
 
 		fprintf(f, "\t\t\t[%zd] = {%s\n", s_i, s_i == config->start ? " /* start */" : "");
+
+		/* These could comment with the label characters, but would need to be very careful with escaping. */
 		fprintf(f, "\t\t\t\t.labels = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
 		    labels[0], labels[1], labels[2], labels[3]);
 		fprintf(f, "\t\t\t\t.label_group_starts = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
@@ -488,38 +483,57 @@ generate_data(FILE *f, const struct cdata_config *config,
 			fprintf(f, "\t\t\t\t.default_dst = %u,\n", default_dst);
 		}
 
-
 		fprintf(f, "\t\t\t\t.end = %d,\n", is_end);
 		fprintf(f, "\t\t\t\t.dst_table_offset = %zd,\n", edge_base);
 
-		/* Only emit these if any state uses endids/eager_outputs, and if this
-		 * state doesn't then use the end of the array as NONE. */
+		/* Only include these if any state uses endids/eager_outputs, and
+		 * if this state doesn't then use the end of the array as NONE. */
 		if (config->endid_count > 0) {
 			if (has_endids) {
+				if (comments) {
+					fprintf(f, "\t\t\t\t/* endids:");
+					for (size_t i = 0; i < s->endids.count; i++) {
+						if (i > 0 && (i & 15) == 0) {
+							fprintf(f, "\n\t\t\t\t *");
+						}
+						fprintf(f, " %u", s->endids.ids[i]);
+					}
+					fprintf(f, " */\n");
+				}
 				fprintf(f, "\t\t\t\t.endid_offset = %zd,\n", endids_base);
 			} else {
-				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* none */\n", config->endid_count);
+				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* NONE */\n", config->endid_count);
 			}
 
 		}
 
 		if (config->eager_output_count > 0) {
 			if (has_eager_outputs) {
+				if (comments) {
+					fprintf(f, "\t\t\t\t/* eager_outputs:");
+					for (size_t i = 0; i < s->eager_outputs->count; i++) {
+						if (i > 0 && (i & 15) == 0) {
+							fprintf(f, "\n\t\t\t\t *");
+						}
+						fprintf(f, " %u", s->eager_outputs->ids[i]);
+					}
+					fprintf(f, " */\n");
+				}
 				fprintf(f, "\t\t\t\t.eager_output_offset = %zd,\n", eager_outputs_base);
 			} else {
-				fprintf(f, "\t\t\t\t.eager_output_offset = %zd, /* none */\n", config->eager_output_count);
+				fprintf(f, "\t\t\t\t.eager_output_offset = %zd, /* NONE */\n", config->eager_output_count);
 			}
 		}
 
 		fprintf(f, "\t\t\t},\n");
 	}
-	fprintf(f, "\t},\n");
+	fprintf(f, "\t\t},\n");
 
 	fprintf(f,
 	    "\t\t.dst_table = {");
 
 	for (size_t i = 0; i < edges.used; i++) {
-		if ((i & 31) == 0) { fprintf(f, "\n"); }
+		if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
 		fprintf(f, " %u,", edges.buf[i]);
 	}
 
@@ -529,20 +543,20 @@ generate_data(FILE *f, const struct cdata_config *config,
 	if (endid_buf.used > 0) {
 		fprintf(f, "\t\t.endid_table = {");
 		for (size_t i = 0; i < endid_buf.used; i++) {
-			if ((i & 31) == 0) { fprintf(f, "\n"); }
+			if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
 			fprintf(f, " %lu,", endid_buf.buf[i]);
 		}
-		fprintf(f, "\n 0 /* end */,\n");
+		fprintf(f, "\n\t\t\t 0 /* end */,\n");
 		fprintf(f, "\n\t\t},\n");
 	}
 
 	if (eager_output_buf.used > 0) {
 		fprintf(f, "\t\t.eager_output_table = {");
 		for (size_t i = 0; i < eager_output_buf.used; i++) {
-			if ((i & 31) == 0) { fprintf(f, "\n"); }
+			if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
 			fprintf(f, " %lu,", eager_output_buf.buf[i]);
 		}
-		fprintf(f, "\n 0 /* end */,\n");
+		fprintf(f, "\n\t\t\t 0 /* end */,\n");
 		fprintf(f, "\n\t\t},\n");
 	}
 
@@ -655,10 +669,10 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\tif (state->labels[w_i] & bit) { /* if state has label */\n"
 	    "\t\t\tconst uint64_t mask = bit - 1;\n"
 	    "\t\t\tconst uint64_t masked_word = state->label_group_starts[w_i] & mask;\n"
-	    "\t\t\tconst size_t offset = %s(masked_word);\n"
-	    "\t\t\tconst size_t rank = state->rank_sums[w_i] + offset;\n"
-	    "\t\t\tconst uint32_t next_state = %s_dfa_data.dst_table[state->dst_table_offset + rank];\n"
-	    "\t\t\tcur_state = next_state;\n"
+	    "\t\t\tconst size_t bit_rank_in_masked_word = %s(masked_word);\n"
+	    "\t\t\tconst size_t rank = state->rank_sums[w_i] + bit_rank_in_masked_word;\n"
+	    "\t\t\tconst size_t dst_offset = state->dst_table_offset + rank;\n"
+	    "\t\t\tcur_state = %s_dfa_data.dst_table[dst_offset];\n"
 	    "\t\t\tcontinue;\n"
 	    "\t\t} else if (state->default_dst < %s_STATE_COUNT) {\n"
 	    "\t\t\tcur_state = state->default_dst;\n"
@@ -923,7 +937,7 @@ fsm_print_cdata(FILE *f,
 		fprintf(f, "{\n");
 
 		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
-		if (!generate_data(f, &config, prefix, ir)) { return -1; }
+		if (!generate_data(f, &config, opt->comments, prefix, ir)) { return -1; }
 		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
 
 		fprintf(f, "}\n");
@@ -931,7 +945,7 @@ fsm_print_cdata(FILE *f,
 	} else {
 		/* caller sets up the function head */
 		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
-		if (!generate_data(f, &config, prefix, ir)) { return -1; }
+		if (!generate_data(f, &config, opt->comments, prefix, ir)) { return -1; }
 		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
 	}
 
