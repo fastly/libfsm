@@ -537,7 +537,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 	}
 
 	if (eager_output_buf.used > 0) {
-		fprintf(f, "\t\teager_output_table = {");
+		fprintf(f, "\t\t.eager_output_table = {");
 		for (size_t i = 0; i < eager_output_buf.used; i++) {
 			if ((i & 31) == 0) { fprintf(f, "\n"); }
 			fprintf(f, " %lu,", eager_output_buf.buf[i]);
