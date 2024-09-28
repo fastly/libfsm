@@ -568,7 +568,7 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 {
 	(void)config;
 	fprintf(f, "\tconst size_t %s_STATE_COUNT = %zd;\n", prefix, config->state_count);
-	fprintf(f, "\tconst size_t %s_EDGE_COUNT = %zd;\n", prefix, config->non_default_edge_count);
+	/* fprintf(f, "\tconst size_t %s_EDGE_COUNT = %zd;\n", prefix, config->non_default_edge_count); */
 
 	if (config->endid_count > 0) {
 		fprintf(f, "\tconst size_t %s_ENDID_TABLE_COUNT = %zd;\n", prefix, config->endid_count);
@@ -612,14 +612,14 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	if (config->eager_output_count > 0) {
 		fprintf(f,
 		    "\n"
-		    "\t\tif (state->eager_output_offset < %s_EAGER_OFFSET_TABLE_COUNT) {\n"
+		    "\t\tif (state->eager_output_offset < %s_EAGER_OUTPUT_TABLE_COUNT) {\n"
 		    "\t\t\t%s *eo_scan = &%s_dfa_data.eager_output_table[state->eager_output_offset];\n"
 		    "\t\t\t%s cur, next;\n"
 		    "\t\t\tdo {\n"
 		    "\t\t\t\tcur = *eo_scan;\n"
 		    "\t\t\t\teager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
 		    "\t\t\t\teo_scan++;\n"
-		    "\t\t\t\tnext = *endid_scan;\n"
+		    "\t\t\t\tnext = *eo_scan;\n"
 		    "\t\t\t} while (next > cur);\n"
 		    "\t\t}\n",
 		    prefix,
