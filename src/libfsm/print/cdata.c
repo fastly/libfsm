@@ -40,6 +40,7 @@ enum id_type {
 	U16,
 	U32,
 	U64,
+	UNSIGNED,
 };
 
 static const char*
@@ -50,6 +51,7 @@ id_type_str(enum id_type t)
 	case U16: return "uint16_t";
 	case U32: return "uint32_t";
 	case U64: return "uint64_t";
+	case UNSIGNED: return "unsigned";
 	default:
 		assert(!"match fail");
 		return "";
@@ -110,12 +112,6 @@ struct prefix_cdata_dfa {
 
 		bool end;	/* end state? */
 
-		/* TODO: for a complete state, we could encode just the labels that
-		 * have a different destination than the preceding labels, since
-		 * there is usually a lot of duplication. */
-		/* bool complete; */
-
-		/* FIXME: emit uint64_t or uint32_t here, based on edge table size */
 		size_t dst_table_offset; /* where the offsets start */
 
 		/* Offsets into endid and eager output tables. The total table
@@ -152,6 +148,8 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	/* TODO: comments */
 	(void)comments;
 
+	/* TODO: move .end and .endid_offset into a separate table, they aren't accessed
+	 * until the end of input. Do this once there's baseline timing info. */
 	fprintf(f,
 	    "\tstruct %s_cdata_dfa {\n"
 	    "\t\t%s_cdata_state start;\n"
@@ -163,7 +161,6 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	    "\t\t\tuint8_t rank_sums[4]; /* sum as of end of label_group_starts[n] */\n"
 	    "\n"
 	    "\t\t\tbool end;\n",
-	    /* "\t\t\tbool complete;\n", */
 	    prefix, prefix, prefix, prefix, prefix);
 
 	fprintf(f, "\t\t\t%s dst_table_offset;\n", id_type_str(config->t_state_id));
@@ -182,15 +179,11 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	    config->state_count, prefix, config->non_default_edge_count);
 
 	if (config->endid_count > 0) {
-		/* TODO: reduce the size of the endid type when possible -- this will
-		 * usually be sequentially allocated, so it will typically fit in a
-		 * uint8_t or uint16_t. */
 		fprintf(f, "\t\t%s endid_table[%zd + 1];\n",
 		    id_type_str(config->t_endid_value), config->endid_count);
 	}
 
 	if (config->eager_output_count > 0) {
-		/* TODO: reduce the size of the eager_ouptut id type when possible */
 		fprintf(f, "\t\t%s eager_output_table[%zd + 1];\n",
 		    id_type_str(config->t_eager_output_value), config->eager_output_count);
 	}
@@ -232,7 +225,7 @@ static bool
 save_groups(size_t group_count, const struct ir_group *groups,
     struct dst_buf *edges, uint64_t *labels, uint64_t *label_group_starts, uint8_t *rank_sums) {
 	/* Convert the group ranges to bitsets and an edge->destination state list. */
-#define DUMP_GROUP 1
+#define DUMP_GROUP 0
 	if (DUMP_GROUP) {
 		fprintf(stderr, "\n%s: dump_group [[\n", __func__);
 		for (size_t g_i = 0; g_i < group_count; g_i++) {
@@ -372,6 +365,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 	    "\tstatic struct %s_cdata_dfa %s_dfa_data = {\n"
 	    "\t\t.start = %u,\n"
 	    "\t\t.states = {\n", prefix, prefix, config->start);
+
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
 		const struct ir_state *s = &ir->states[s_i];
 		const bool is_end = s->isend;
@@ -403,6 +397,12 @@ generate_data(FILE *f, const struct cdata_config *config,
 			}
 
 			endids_base = endid_buf.used;
+
+			/* TODO: Intern the run of endids. They are often identical
+			 * between states, so the earlier reference could be reused.
+			 * This is particulary important if they're all stored as
+			 * "unsigned" rather than reducing to the smallest numeric
+			 * type that fits all values used. */
 			for (size_t i = 0; i < s->endids.count; i++) {
 				if (!append_endid(&endid_buf, s->endids.ids[i])) {
 					goto alloc_fail;
@@ -421,6 +421,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 			}
 			eager_outputs_base = eager_output_buf.used;
 
+			/* TODO: Intern, emit reference to earlier set. */
 			for (size_t i = 0; i < eo_count; i++) {
 				if (!append_eager_output(&eager_output_buf, s->eager_outputs->ids[i])) {
 					goto alloc_fail;
@@ -561,7 +562,7 @@ alloc_fail:
 }
 
 static bool
-generate_interpreter(FILE *f, const struct cdata_config *config, const char *prefix)
+generate_interpreter(FILE *f, const struct cdata_config *config, const struct fsm_options *opt, const char *prefix)
 {
 	(void)config;
 	fprintf(f, "\tconst size_t %s_STATE_COUNT = %zd;\n", prefix, config->state_count);
@@ -575,23 +576,54 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const char *pre
 		fprintf(f, "\tconst size_t %s_EAGER_OUTPUT_TABLE_COUNT = %zd;\n", prefix, config->eager_output_count);
 	}
 
+	/* start state */
 	fprintf(f, "\tuint32_t cur_state = %s_dfa_data.start;\n", prefix);
+	fprintf(f, "\n");
 
-	/* Loop over the input characters.
-	 * FIXME: io mode */
-	fprintf(f,
-	    "\tconst char *pos = input;\n"
-	    "\twhile (*pos != 0) {\n"
-	    "\t\tconst uint8_t c = *pos;\n"
-	    "\t\tpos++;\n");
+	/* Loop over the input characters */
+	switch (opt->io) {
+		case FSM_IO_GETC:
+			fprintf(f, "\tint raw_c;\n");
+			fprintf(f, "\twhile (raw_c = fsm_getc(getc_opaque), raw_c != EOF) {\n");
+			fprintf(f, "\t\tconst uint8_t c = (uint8_t)raw_c;\n");
+			break;
+
+		case FSM_IO_STR:
+			fprintf(f, "\tconst char *p;\n");
+			fprintf(f, "\tfor (p = s; *p != '\\0'; p++) {\n");
+			fprintf(f, "\t\tconst uint8_t c = (uint8_t)*p;\n");
+			break;
+
+		case FSM_IO_PAIR:
+			fprintf(f, "\tconst char *p;\n");
+			fprintf(f, "\tfor (p = b; p != e; p++) {\n");
+			fprintf(f, "\t\tconst uint8_t c = (uint8_t)*p;\n");
+			break;
+	}
 
 	fprintf(f,
-	    "\t\tconst struct %s_cdata_state *s = &%s_dfa_data.states[cur_state];\n", prefix, prefix);
+	    "\t\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n", prefix, prefix);
 
 	/* If any states have eager outputs, check if the current state
-	 * does, and if so, emit them somehow. */
+	 * does, and if so, set their flags. This assumes eager_output_buf is large enough,
+	 * and is a strong incentive to use sequentially assigned IDs. */
 	if (config->eager_output_count > 0) {
-		assert(!"todo");
+		fprintf(f,
+		    "\n"
+		    "\t\tif (state->eager_output_offset < %s_EAGER_OFFSET_TABLE_COUNT) {\n"
+		    "\t\t\t%s *eo_scan = &%s_dfa_data.eager_output_table[state->eager_output_offset];\n"
+		    "\t\t\t%s cur, next;\n"
+		    "\t\t\tdo {\n"
+		    "\t\t\t\tcur = *eo_scan;\n"
+		    "\t\t\t\teager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
+		    "\t\t\t\teo_scan++;\n"
+		    "\t\t\t\tnext = *endid_scan;\n"
+		    "\t\t\t} while (next > cur);\n"
+		    "\t\t}\n",
+		    prefix,
+		    id_type_str(config->t_eager_output_value),
+		    prefix,
+		    id_type_str(config->t_eager_output_value));
 	}
 
 	/* Function to count the bits set in a uint64_t. */
@@ -606,8 +638,8 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const char *pre
 	 * state's base offset in that table.
 	 *
 	 * The bit counts for each word of label_group_starts[] are
-	 * cached in s->rank_sums, so it only needs to count the bits
-	 * within s->label_group_starts[c/64] before the character mod
+	 * cached in state->rank_sums, so it only needs to count the bits
+	 * within state->label_group_starts[c/64] before the character mod
 	 * 64.
 	 *
 	 * If the character isn't in the label set, then go to the
@@ -618,18 +650,18 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const char *pre
 	    "\t\tconst size_t w_i = c/64;\n"
 	    "\t\tconst size_t word_rem = c & 63;\n"
 	    "\t\tconst uint64_t bit = (uint64_t)1 << word_rem;\n"
-	    "\t\tif (s->labels[w_i] & bit) { /* if state has label */\n"
+	    "\t\tif (state->labels[w_i] & bit) { /* if state has label */\n"
 	    "\t\t\tconst uint64_t mask = bit - 1;\n"
-	    "\t\t\tconst uint64_t masked_word = s->label_group_starts[w_i] & mask;\n"
+	    "\t\t\tconst uint64_t masked_word = state->label_group_starts[w_i] & mask;\n"
 	    "\t\t\tconst size_t offset = %s(masked_word);\n"
-	    "\t\t\tconst size_t rank = s->rank_sums[w_i] + offset;\n"
-	    "\t\t\tconst uint32_t next_state = %s_dfa_data.dst_table[s->dst_table_offset + rank];\n"
+	    "\t\t\tconst size_t rank = state->rank_sums[w_i] + offset;\n"
+	    "\t\t\tconst uint32_t next_state = %s_dfa_data.dst_table[state->dst_table_offset + rank];\n"
 	    "\t\t\tcur_state = next_state;\n"
 	    "\t\t\tcontinue;\n"
-	    "\t\t} else if (s->default_dst < %s_STATE_COUNT) {\n"
-	    "\t\t\tcur_state = s->default_dst;\n"
+	    "\t\t} else if (state->default_dst < %s_STATE_COUNT) {\n"
+	    "\t\t\tcur_state = state->default_dst;\n"
 	    "\t\t} else {\n"
-	    "\t\t\treturn false; /* no match */\n"
+	    "\t\t\treturn 0; /* no match */\n"
 	    "\t\t}\n"
 	    "\t}\n",
 	    popcount, prefix, prefix);
@@ -637,31 +669,45 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const char *pre
 	/* At the end of the input, check if the current state is an end.
 	 * If not, there's no match.  */
 	fprintf(f,
-	    "\tconst struct %s_cdata_state *s = &%s_dfa_data.states[cur_state];\n"
-	    "\tif (!s->end) { return false; }\n", prefix, prefix);
+	    "\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n"
+	    "\tif (!state->end) { return 0; /* no match */ }\n", prefix, prefix);
 
+	/* Set the passed-in reference to the endids, if any. */
 	if (config->endid_count > 0) {
 		/* If there are endids in the DFA, check if the current state's
 		 * endid_offset is in range. (If not, the state has none.)
 		 * Those endids appear in as a run of ascending values in
 		 * the endid_table, starting from that offset, and are terminated
 		 * by the first lower value. endid_table[] has an extra 0 appended
-		 * as a terminator for the last set. */
+		 * as a terminator for the last set.
+		 *
+		 * TODO: This assumes AMBIG_MULTI. */
 		fprintf(f,
-		    "\tif (s->endid_offset < %s_ENDID_TABLE_COUNT) {\n"
-		    "\t\t%s *endid = &%s_dfa_data.endid_table[s->endid_offset];\n"
+		    "\tif (state->endid_offset < %s_ENDID_TABLE_COUNT) {\n"
+		    "\t\t%s *endid_scan = &%s_dfa_data.endid_table[state->endid_offset];\n"
+		    "\t\tconst %s *endid_base = endid_scan;\n"
+		    "\t\tsize_t endid_count = 0;\n"
 		    "\t\tuint64_t cur, next;\n"
 		    "\t\tdo {\n"
-		    "\t\t\tcur = *endid;\n"
-		    "\t\t\tendid++;\n"
-		    "\t\t\tnext = *endid;\n"
+		    "\t\t\tcur = *endid_scan;\n"
+		    "\t\t\tendid_scan++;\n"
+		    "\t\t\tendid_count++;\n"
+		    "\t\t\tnext = *endid_scan;\n"
 		    "\t\t} while (next > cur);\n"
+		    "\t\t*%s = endid_base;\n"
+		    "\t\t*%s = endid_count;\n"
 		    "\t}\n",
-		    prefix, id_type_str(config->t_endid_value), prefix);
+		    prefix,
+		    id_type_str(config->t_endid_value),
+		    prefix,
+		    id_type_str(config->t_endid_value),
+		    /* TODO: rename these to endid_ids and endid_count?
+		     * That will be an interface change. */
+		    "ids", "count");
 	}
 
-	/* We got a match. */
-	fprintf(f, "\treturn true;\n");
+	/* Got a match. */
+	fprintf(f, "\treturn 1; /* match */\n");
 	return true;
 }
 
@@ -678,6 +724,8 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
 		const struct ir_state *s = &ir->states[s_i];
 
+		/* TODO: intern the endid sets here, to determine upfront
+		 * the endid table size and offset numeric type. */
 		config->endid_count += s->endids.count;
 		for (size_t i = 0; i < s->endids.count; i++) {
 			if (s->endids.ids[i] > max_endid) {
@@ -697,21 +745,16 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 
 		switch (s->strategy) {
 		case IR_NONE:
-			/* fprintf(stderr, "-- none\n"); */
 			config->non_default_edge_count += 0;
 			break;
 		case IR_SAME:	/* all default */
-			/* fprintf(stderr, "-- same\n"); */
 			config->non_default_edge_count += 0;
 			break;
 		case IR_COMPLETE:
-			/* FIXME: smarter edge encoding */
-			/* fprintf(stderr, "-- complete\n"); */
 			config->non_default_edge_count += 256;
 			break;
 		case IR_PARTIAL:
 		{
-			/* fprintf(stderr, "-- partial\n"); */
 			size_t state_total = 0;
 			for (size_t g_i = 0; g_i < s->u.partial.n; g_i++) {
 				const struct ir_group *g = &s->u.partial.groups[g_i];
@@ -729,7 +772,6 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 		}
 		case IR_DOMINANT:
 		{
-			/* fprintf(stderr, "-- dominant\n"); */
 			/* not counting the mode, which will become the default */
 			size_t state_total = 0;
 			for (size_t g_i = 0; g_i < s->u.dominant.n; g_i++) {
@@ -764,10 +806,11 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 	config->t_endid_offset = size_needed(config->endid_count + config->state_count);
 	config->t_eager_output_offset = size_needed(config->eager_output_count + config->state_count);
 
-	config->t_endid_value = size_needed(max_endid);
-	config->t_eager_output_value = size_needed(max_eager_output_id);
+	/* The caller expects this to be unsigned, and the current interface just sets
+	 * a pointer to the array of IDs. */
+	config->t_endid_value = UNSIGNED; //size_needed(max_endid);
 
-	/* TODO: numeric types for endid and eager_output values */
+	config->t_eager_output_value = size_needed(max_eager_output_id);
 	return true;
 
 not_implemented:
@@ -799,9 +842,6 @@ fsm_print_cdata(FILE *f,
 	    config.endid_count,
 	    config.eager_output_count,
 	    config.group_count, config.range_count);
-	/* fprintf(stderr, "// sizes: state_id %u, edge_id %u, endid_id %u, eager_output_id %u (s%u_e%u_E%u_O%u)\n", */
-	/*     config.size_state_id, config.size_edge_id, config.size_endid_id, config.size_eager_output_id, */
-	/*     config.size_state_id, config.size_edge_id, config.size_endid_id, config.size_eager_output_id); */
 
 	const char *prefix;
 	if (opt->prefix != NULL) {
@@ -810,12 +850,11 @@ fsm_print_cdata(FILE *f,
 		prefix = "fsm_";
 	}
 
-	if (!opt->fragment) {
-		/* generate function head */
-		assert(!"todo: AMBIG mode, eager outputs");
-#if 0
-		fprintf(f, "|n");
-		fprinft(f, "int\n%smain", prefix);
+	if (!opt->fragment) {	/* generate function head */
+		fprintf(f, "\n");
+
+		fprintf(f, "int\n%smain", prefix);
+		fprintf(f, "(");
 
 		switch (opt->io) {
 		case FSM_IO_GETC:
@@ -830,12 +869,59 @@ fsm_print_cdata(FILE *f,
 			fprintf(f, "const char *b, const char *e");
 			break;
 		}
-#endif
+
+		/* TODO: add an opt flag for eager_output codegen */
+		if (config.eager_output_count > 0) {
+			fprintf(f, ",\n");
+			fprintf(f, "\tuint64_t *eager_output_buf");
+		}
+
+		/*
+		 * unsigned rather than fsm_end_id_t here, so the generated code
+		 * doesn't depend on fsm.h
+		 */
+		switch (opt->ambig) {
+		case AMBIG_NONE:
+			break;
+
+		case AMBIG_ERROR:
+		case AMBIG_EARLIEST:
+			fprintf(f, ",\n");
+			fprintf(f, "\tconst unsigned *id");
+			break;
+
+		case AMBIG_MULTIPLE:
+			fprintf(f, ",\n");
+			fprintf(f, "\tconst unsigned **ids, size_t *count");
+			break;
+
+		default:
+			assert(!"unreached");
+			abort();
+		}
+
+		if (hooks->args != NULL) {
+			fprintf(f, ",\n");
+			fprintf(f, "\t");
+
+			if (-1 == print_hook_args(f, opt, hooks, NULL, NULL)) {
+				return -1;
+			}
+		}
+		fprintf(f, ")\n");
+		fprintf(f, "{\n");
+
+		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
+		if (!generate_data(f, &config, prefix, ir)) { return -1; }
+		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
+
+		fprintf(f, "}\n");
+		fprintf(f, "\n");
 	} else {
 		/* caller sets up the function head */
 		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
 		if (!generate_data(f, &config, prefix, ir)) { return -1; }
-		if (!generate_interpreter(f, &config, prefix)) { return -1; }
+		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
 	}
 
 #if 0
