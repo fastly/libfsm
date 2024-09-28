@@ -282,8 +282,6 @@ save_groups(size_t group_count, const struct ir_group *groups,
 		}
 
 		for (uint8_t c = r->start; c <= r->end; c++) {
-			fprintf(stderr, "  -- char '%c' (0x%02x) -> %d\n",
-			    isprint(c) ? c : '.', c, r->dst_state);
 			assert(!u64bitset_get(labels, r->start));
 			u64bitset_set(labels, c);
 		}
@@ -434,7 +432,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 			eager_outputs_prev = s->eager_outputs->ids[eo_count - 1];
 		}
 
-		fprintf(stderr, "-- processing strategy for state %zd...\n", s_i);
+		/* fprintf(stderr, "-- processing strategy for state %zd...\n", s_i); */
 
 		switch (s->strategy) {
 		case IR_NONE:
