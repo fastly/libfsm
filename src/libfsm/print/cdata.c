@@ -179,13 +179,17 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	    config->state_count, prefix, config->non_default_edge_count);
 
 	if (config->endid_count > 0) {
-		fprintf(f, "\t\t%s endid_table[%zd + 1];\n",
-		    id_type_str(config->t_endid_value), config->endid_count);
+		/* FIXME: determine exact size after interning, then avoid padding with
+		 * state_count here. */
+		fprintf(f, "\t\t%s endid_table[%zd + 1 + %zd];\n",
+		    id_type_str(config->t_endid_value), config->endid_count, config->state_count);
 	}
 
 	if (config->eager_output_count > 0) {
-		fprintf(f, "\t\t%s eager_output_table[%zd + 1];\n",
-		    id_type_str(config->t_eager_output_value), config->eager_output_count);
+		/* FIXME: determine exact size after interning, then avoid padding with
+		 * state_count here. */
+		fprintf(f, "\t\t%s eager_output_table[%zd + 1 + %zd];\n",
+		    id_type_str(config->t_eager_output_value), config->eager_output_count, config->state_count);
 	}
 
 	fprintf(f,
