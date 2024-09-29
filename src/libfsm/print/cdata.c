@@ -577,6 +577,41 @@ alloc_fail:
 	return false;
 }
 
+static void
+generate_eager_output_check(FILE *f, const struct cdata_config *config, const char *prefix)
+{
+	/* If any states have eager outputs, check if the current state
+	 * does, and if so, set their flags. This assumes eager_output_buf is large enough,
+	 * and is a strong incentive to use sequentially assigned IDs. */
+	if (config->eager_output_count > 0) {
+		fprintf(f,
+		    "\t\tif (debug_traces) {\n"
+		    "\t\t\tfprintf(stderr, \"%%s: cur_state %%u, next char '%%c'\\n\", __func__, cur_state, c);\n"
+		    "\t\t}"
+		    "\n"
+		    "\t\tif (state->eager_output_offset < %s_EAGER_OUTPUT_TABLE_COUNT) {\n"
+		    "\t\t\tif (debug_traces) {\n"
+		    "\t\t\t\tfprintf(stderr, \"-- eager_output_offset %%u\\n\", state->eager_output_offset);\n"
+		    "\t\t\t}\n"
+		    "\t\t\t%s *eo_scan = &%s_dfa_data.eager_output_table[state->eager_output_offset];\n"
+		    "\t\t\t%s cur, next;\n"
+		    "\t\t\tdo {\n"
+		    "\t\t\t\tcur = *eo_scan;\n"
+		    "\t\t\t\tif (debug_traces) {\n"
+		    "\t\t\t\t\tfprintf(stderr, \"%%s: got eager_output %%u\\n\", __func__, cur);\n"
+		    "\t\t\t\t}\n"
+		    "\t\t\t\teager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
+		    "\t\t\t\teo_scan++;\n"
+		    "\t\t\t\tnext = *eo_scan;\n"
+		    "\t\t\t} while (next > cur);\n"
+		    "\t\t}\n",
+		    prefix,
+		    id_type_str(config->t_eager_output_value),
+		    prefix,
+		    id_type_str(config->t_eager_output_value));
+	}
+}
+
 static bool
 generate_interpreter(FILE *f, const struct cdata_config *config, const struct fsm_options *opt, const char *prefix)
 {
@@ -624,36 +659,8 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	fprintf(f,
 	    "\t\tconst bool debug_traces = %s;\n", debug_traces ? "true" : "false");
 
-	/* If any states have eager outputs, check if the current state
-	 * does, and if so, set their flags. This assumes eager_output_buf is large enough,
-	 * and is a strong incentive to use sequentially assigned IDs. */
-	if (config->eager_output_count > 0) {
-		fprintf(f,
-		    "\t\tif (debug_traces) {\n"
-		    "\t\t\tfprintf(stderr, \"%%s: cur_state %%u, next char '%%c'\\n\", __func__, cur_state, c);\n"
-		    "\t\t}"
-		    "\n"
-		    "\t\tif (state->eager_output_offset < %s_EAGER_OUTPUT_TABLE_COUNT) {\n"
-		    "\t\t\tif (debug_traces) {\n"
-		    "\t\t\t\tfprintf(stderr, \"-- eager_output_offset %%u\\n\", state->eager_output_offset);\n"
-		    "\t\t\t}\n"
-		    "\t\t\t%s *eo_scan = &%s_dfa_data.eager_output_table[state->eager_output_offset];\n"
-		    "\t\t\t%s cur, next;\n"
-		    "\t\t\tdo {\n"
-		    "\t\t\t\tcur = *eo_scan;\n"
-		    "\t\t\t\tif (debug_traces) {\n"
-		    "\t\t\t\t\tfprintf(stderr, \"%%s: got eager_output %%u\\n\", __func__, cur);\n"
-		    "\t\t\t\t}\n"
-		    "\t\t\t\teager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
-		    "\t\t\t\teo_scan++;\n"
-		    "\t\t\t\tnext = *eo_scan;\n"
-		    "\t\t\t} while (next > cur);\n"
-		    "\t\t}\n",
-		    prefix,
-		    id_type_str(config->t_eager_output_value),
-		    prefix,
-		    id_type_str(config->t_eager_output_value));
-	}
+	/* If the state being entered has eager_outputs, set their flags. */
+	generate_eager_output_check(f, config, prefix);
 
 	/* Function to count the bits set in a uint64_t.
 	 *
@@ -758,6 +765,9 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 		     * That will be an interface change. */
 		    "ids", "count");
 	}
+
+	/* If the end state has eager_outputs, set their flags. */
+	generate_eager_output_check(f, config, prefix);
 
 	/* Got a match. */
 	fprintf(f, "\treturn 1; /* match */\n");
