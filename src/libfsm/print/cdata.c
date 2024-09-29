@@ -642,7 +642,18 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 		    id_type_str(config->t_eager_output_value));
 	}
 
-	/* Function to count the bits set in a uint64_t. */
+	/* Function to count the bits set in a uint64_t.
+	 *
+	 * TODO It may be faster to use a small lookup table and add
+	 * the next N least significant bits, halting on 0:
+	 *
+	 *     size_t sum = 0;
+	 *     while (word != 0) {
+	 *         sum += lookup_table_8_bit_popcount[word & 0xff];
+	 *         word >>= 8;
+	 *     }
+	 *
+	 * because usually many of the upper bits will be masked out. */
 	const char *popcount = "__builtin_popcountl";
 
 	/* For each character of the input, check if it's in the set of
@@ -749,6 +760,7 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 			}
 		}
 
+		/* TODO: intern the eager_output sets too */
 		const size_t eo_count = s->eager_outputs == NULL
 		    ? 0
 		    : s->eager_outputs->count;
@@ -759,6 +771,11 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 			}
 		}
 
+		/* TODO also intern the destination sets, this should
+		 * use the same backward chaining search index approach that
+		 * heatshrink uses, and since the DFA is trimmed all states
+		 * should have at least one edge leading to them: it doesn't
+		 * need to be sparse. */
 		switch (s->strategy) {
 		case IR_NONE:
 			config->non_default_edge_count += 0;
