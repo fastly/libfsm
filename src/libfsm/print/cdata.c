@@ -585,9 +585,6 @@ generate_eager_output_check(FILE *f, const struct cdata_config *config, const ch
 	 * and is a strong incentive to use sequentially assigned IDs. */
 	if (config->eager_output_count > 0) {
 		fprintf(f,
-		    "\t\tif (debug_traces) {\n"
-		    "\t\t\tfprintf(stderr, \"%%s: cur_state %%u, next char '%%c'\\n\", __func__, cur_state, c);\n"
-		    "\t\t}"
 		    "\n"
 		    "\t\tif (state->eager_output_offset < %s_EAGER_OUTPUT_TABLE_COUNT) {\n"
 		    "\t\t\tif (debug_traces) {\n"
@@ -598,7 +595,7 @@ generate_eager_output_check(FILE *f, const struct cdata_config *config, const ch
 		    "\t\t\tdo {\n"
 		    "\t\t\t\tcur = *eo_scan;\n"
 		    "\t\t\t\tif (debug_traces) {\n"
-		    "\t\t\t\t\tfprintf(stderr, \"%%s: got eager_output %%u\\n\", __func__, cur);\n"
+		    "\t\t\t\t\tfprintf(stderr, \"%%s: setting eager_output flag %%u\\n\", __func__, cur);\n"
 		    "\t\t\t\t}\n"
 		    "\t\t\t\teager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
 		    "\t\t\t\teo_scan++;\n"
@@ -619,8 +616,6 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	fprintf(f, "\tconst size_t %s_STATE_COUNT = %zd;\n", prefix, config->state_count);
 	/* fprintf(f, "\tconst size_t %s_EDGE_COUNT = %zd;\n", prefix, config->non_default_edge_count); */
 
-	const bool debug_traces = false;
-
 	if (config->endid_count > 0) {
 		fprintf(f, "\tconst size_t %s_ENDID_TABLE_COUNT = %zd;\n", prefix, config->endid_count);
 	}
@@ -632,6 +627,11 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	/* start state */
 	fprintf(f, "\tuint32_t cur_state = %s_dfa_data.start;\n", prefix);
 	fprintf(f, "\n");
+
+	/* Setting this to true will log out execution steps. */
+	const bool debug_traces = false;
+	fprintf(f,
+	    "\tconst bool debug_traces = %s;\n", debug_traces ? "true" : "false");
 
 	/* Loop over the input characters */
 	switch (opt->io) {
@@ -656,8 +656,6 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 
 	fprintf(f,
 	    "\t\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n", prefix, prefix);
-	fprintf(f,
-	    "\t\tconst bool debug_traces = %s;\n", debug_traces ? "true" : "false");
 
 	/* If the state being entered has eager_outputs, set their flags. */
 	generate_eager_output_check(f, config, prefix);
