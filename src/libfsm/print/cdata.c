@@ -584,6 +584,8 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	fprintf(f, "\tconst size_t %s_STATE_COUNT = %zd;\n", prefix, config->state_count);
 	/* fprintf(f, "\tconst size_t %s_EDGE_COUNT = %zd;\n", prefix, config->non_default_edge_count); */
 
+	const bool debug_traces = false;
+
 	if (config->endid_count > 0) {
 		fprintf(f, "\tconst size_t %s_ENDID_TABLE_COUNT = %zd;\n", prefix, config->endid_count);
 	}
@@ -619,18 +621,29 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 
 	fprintf(f,
 	    "\t\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n", prefix, prefix);
+	fprintf(f,
+	    "\t\tconst bool debug_traces = %s;\n", debug_traces ? "true" : "false");
 
 	/* If any states have eager outputs, check if the current state
 	 * does, and if so, set their flags. This assumes eager_output_buf is large enough,
 	 * and is a strong incentive to use sequentially assigned IDs. */
 	if (config->eager_output_count > 0) {
 		fprintf(f,
+		    "\t\tif (debug_traces) {\n"
+		    "\t\t\tfprintf(stderr, \"%%s: cur_state %%u, next char '%%c'\\n\", __func__, cur_state, c);\n"
+		    "\t\t}"
 		    "\n"
 		    "\t\tif (state->eager_output_offset < %s_EAGER_OUTPUT_TABLE_COUNT) {\n"
+		    "\t\t\tif (debug_traces) {\n"
+		    "\t\t\t\tfprintf(stderr, \"-- eager_output_offset %%u\\n\", state->eager_output_offset);\n"
+		    "\t\t\t}\n"
 		    "\t\t\t%s *eo_scan = &%s_dfa_data.eager_output_table[state->eager_output_offset];\n"
 		    "\t\t\t%s cur, next;\n"
 		    "\t\t\tdo {\n"
 		    "\t\t\t\tcur = *eo_scan;\n"
+		    "\t\t\t\tif (debug_traces) {\n"
+		    "\t\t\t\t\tfprintf(stderr, \"%%s: got eager_output %%u\\n\", __func__, cur);\n"
+		    "\t\t\t\t}\n"
 		    "\t\t\t\teager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
 		    "\t\t\t\teo_scan++;\n"
 		    "\t\t\t\tnext = *eo_scan;\n"
@@ -678,16 +691,29 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\tconst size_t word_rem = c & 63;\n"
 	    "\t\tconst uint64_t bit = (uint64_t)1 << word_rem;\n"
 	    "\t\tif (state->labels[w_i] & bit) { /* if state has label */\n"
+	    "\t\tif (debug_traces) {\n"
+	    "\t\t\tfprintf(stderr, \"-- label -> w_i %%zd, bit 0x%%016lx\\n\", w_i, bit);\n"
+	    "\t\t}\n"
 	    "\t\t\tconst uint64_t mask = bit - 1;\n"
 	    "\t\t\tconst uint64_t masked_word = state->label_group_starts[w_i] & mask;\n"
 	    "\t\t\tconst size_t bit_rank_in_masked_word = %s(masked_word);\n"
 	    "\t\t\tconst size_t rank = state->rank_sums[w_i] + bit_rank_in_masked_word;\n"
 	    "\t\t\tconst size_t dst_offset = state->dst_table_offset + rank;\n"
 	    "\t\t\tcur_state = %s_dfa_data.dst_table[dst_offset];\n"
+	    "\t\t\tif (debug_traces) {\n"
+	    "\t\t\t\tfprintf(stderr, \"-- has label, rank %%zd -> dst_offset %%zu -> next_state %%u\\n\",\n"
+	    "\t\t\t\t\trank, dst_offset, cur_state);\n"
+	    "\t\t\t}\n"
 	    "\t\t\tcontinue;\n"
 	    "\t\t} else if (state->default_dst < %s_STATE_COUNT) {\n"
 	    "\t\t\tcur_state = state->default_dst;\n"
+	    "\t\t\tif (debug_traces) {\n"
+	    "\t\t\t\tfprintf(stderr, \"-- doesn't have label -> default state %%u\\n\", state->default_dst);\n"
+	    "\t\t\t}\n"
 	    "\t\t} else {\n"
+	    "\t\t\tif (debug_traces) {\n"
+	    "\t\t\t\tfprintf(stderr, \"-- doesn't have label -> match fail\\n\");\n"
+	    "\t\t\t}\n"
 	    "\t\t\treturn 0; /* no match */\n"
 	    "\t\t}\n"
 	    "\t}\n",
