@@ -697,7 +697,7 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\tconst uint64_t bit = (uint64_t)1 << word_rem;\n"
 	    "\t\tif (state->labels[w_i] & bit) { /* if state has label */\n"
 	    "\t\tif (debug_traces) {\n"
-	    "\t\t\tfprintf(stderr, \"-- label -> w_i %%zd, bit 0x%%016lx\\n\", w_i, bit);\n"
+	    "\t\t\tfprintf(stderr, \"-- label '%%c' (0x%%02x) -> w_i %%zd, bit 0x%%016lx\\n\", isprint(c) ? c : 'c', c, w_i, bit);\n"
 	    "\t\t}\n"
 	    "\t\t\tconst uint64_t mask = bit - 1;\n"
 	    "\t\t\tconst uint64_t masked_word = state->label_group_starts[w_i] & mask;\n"
