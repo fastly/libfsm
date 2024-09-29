@@ -67,16 +67,13 @@ size_needed(size_t max_value)
 	return U64;
 }
 
+#define STATE_OFFSET_NONE ((size_t)-1)
+
 /* Configuration. Figure out whether we really need a uint32_t for edge offsets
  * or can get by with a uint16_t, etc. and make the output more dense. */
 struct cdata_config {
 	fsm_state_t start;
 	size_t state_count;
-	size_t non_default_edge_count;
-	size_t group_count;
-	size_t range_count;
-	size_t endid_count;
-	size_t eager_output_count;
 
 	/* numeric type for state IDs, based on the higest state # */
 	enum id_type t_state_id;
@@ -92,11 +89,48 @@ struct cdata_config {
 	/* numeric type for endid and eager_output table values */
 	enum id_type t_endid_value;
 	enum id_type t_eager_output_value;
+
+	struct dst_buf {
+		size_t ceil;
+		size_t used;
+		uint32_t *buf;
+	} dst_buf;
+
+	struct endid_buf {
+		size_t ceil;
+		size_t used;
+		uint64_t *buf;
+	} endid_buf;
+	size_t max_endid;
+
+	struct eager_output_buf {
+		size_t ceil;
+		size_t used;
+		uint64_t *buf;
+	} eager_output_buf;
+	size_t max_eager_output_id;
+
+	/* The offsets for each state's entries, or STATE_OFFSET_NONE,
+	 * which will be converted to the table length (and treated as
+	 * NONE by a runtime range check). */
+	struct state_info {
+		size_t default_dst;
+		size_t dst;
+		uint64_t labels[256/64];
+		uint64_t label_group_starts[256/64];
+		uint8_t rank_sums[4];
+
+		size_t endid;
+		size_t eager_output;
+	} *state_info;
 };
 
 static bool
 generate_struct_definition(FILE *f, const struct cdata_config *config, bool comments, const char *prefix)
 {
+	const bool has_endids = config->endid_buf.used > 0;
+	const bool has_eager_outputs = config->eager_output_buf.used > 0;
+
 	fprintf(f,
 	    "\ttypedef %s %s_cdata_state;\n",
 	    id_type_str(config->t_state_id), prefix);
@@ -136,10 +170,10 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	}
 	fprintf(f, "\t\t\t%s dst_table_offset;\n", id_type_str(config->t_dst_state_offset));
 
-	if (config->endid_count > 0) {
+	if (has_endids) {
 		fprintf(f, "\t\t\t%s endid_offset;\n", id_type_str(config->t_endid_offset));
 	}
-	if (config->eager_output_count > 0) {
+	if (has_eager_outputs) {
 		fprintf(f, "\t\t\t%s eager_output_offset;\n", id_type_str(config->t_eager_output_offset));
 	}
 
@@ -154,11 +188,9 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	}
 	fprintf(f,
 	    "\t\t%s_cdata_state dst_table[%zd];\n",
-	    prefix, config->non_default_edge_count);
+	    prefix, config->dst_buf.used);
 
-	if (config->endid_count > 0) {
-		/* FIXME: determine exact size after interning, then avoid padding with
-		 * state_count here. */
+	if (has_endids) {
 		if (comments) {
 			fprintf(f,
 			    "\n"
@@ -166,13 +198,11 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 			    "\t\t * by .states[state_id].endid_offset,\n"
 			    "\t\t * terminated by non-increasing value. */\n");
 		}
-		fprintf(f, "\t\t%s endid_table[%zd + 1 + %zd];\n",
-		    id_type_str(config->t_endid_value), config->endid_count, config->state_count);
+		fprintf(f, "\t\t%s endid_table[%zd + 1];\n",
+		    id_type_str(config->t_endid_value), config->endid_buf.used);
 	}
 
-	if (config->eager_output_count > 0) {
-		/* FIXME: determine exact size after interning, then avoid padding with
-		 * state_count here. */
+	if (has_eager_outputs > 0) {
 		if (comments) {
 			fprintf(f,
 			    "\n"
@@ -180,8 +210,8 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 			    "\t\t * by .states[state_id].eager_output_offset,\n"
 			    "\t\t * terminated by non-increasing value. */\n");
 		}
-		fprintf(f, "\t\t%s eager_output_table[%zd + 1 + %zd];\n",
-		    id_type_str(config->t_eager_output_value), config->eager_output_count, config->state_count);
+		fprintf(f, "\t\t%s eager_output_table[%zd + 1];\n",
+		    id_type_str(config->t_eager_output_value), config->eager_output_buf.used);
 	}
 
 	fprintf(f,
@@ -189,173 +219,10 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	return true;
 }
 
-struct dst_buf {
-	size_t ceil;
-	size_t used;
-	uint32_t *buf;
-};
-
-static bool
-append_edge(struct dst_buf *buf, uint32_t e)
-{
-	assert(buf->used < buf->ceil);
-	buf->buf[buf->used++] = e;
-	return true;
-}
-
-struct range_info {
-	uint8_t start;
-	uint8_t end;
-	uint32_t dst_state;
-};
-
-static int
-cmp_outgoing(const void *pa, const void *pb)
-{
-	const struct range_info *a = (const struct range_info *)pa;
-	const struct range_info *b = (const struct range_info *)pb;
-	return a->start < b->start ? -1 : a->start > b->start ? 1 : 0;
-}
-
-static bool
-save_groups(size_t group_count, const struct ir_group *groups,
-	struct dst_buf *edges, uint64_t *labels, uint64_t *label_group_starts, uint8_t *rank_sums)
-{
-	/* Convert the group ranges to bitsets and an edge->destination state list. */
-#define DUMP_GROUP 0
-	if (DUMP_GROUP) {
-		fprintf(stderr, "\n%s: dump_group [[\n", __func__);
-		for (size_t g_i = 0; g_i < group_count; g_i++) {
-			fprintf(stderr, "- group %zd:\n", g_i);
-			const struct ir_group *g = &groups[g_i];
-			for (size_t r_i = 0; r_i < g->n; r_i++) {
-				const struct ir_range *r = &g->ranges[r_i];
-				assert(r->start <= r->end);
-				fprintf(stderr, "  - range[%zd]: '%c'(0x%02x) -- '%c'(0x%02x)\n",
-				    r_i,
-				    isprint(r->start) ? r->start : '.', r->start,
-				    isprint(r->end) ? r->end : '.', r->end);
-			}
-		}
-		fprintf(stderr, "]]\n");
-	}
-
-	/* Because this is a DFA there should be at most 256 outgoing. */
-	size_t outgoing_used = 0;
-	struct range_info outgoing[256];
-
-	/* Groups and ranges aren't necessarily ordered by character, so collect and sort first,
-	 * otherwise the ranks can point to the wrong offset in edges[]. */
-	for (size_t g_i = 0; g_i < group_count; g_i++) {
-		const struct ir_group *g = &groups[g_i];
-		for (size_t r_i = 0; r_i < g->n; r_i++) {
-			const struct ir_range *r = &g->ranges[r_i];
-			assert(r->start <= r->end);
-			outgoing[outgoing_used++] = (struct range_info){
-				.start = r->start,
-				.end = r->end,
-				.dst_state = g->to,
-			};
-			assert(outgoing_used <= 256);
-		}
-	}
-
-	/* Sort them by .start. They should be unique and non-overlapping. */
-	qsort(outgoing, outgoing_used, sizeof(outgoing[0]), cmp_outgoing);
-	for (size_t o_i = 1; o_i < outgoing_used; o_i++) {
-		assert(outgoing[o_i - 1].start < outgoing[o_i].start);
-	}
-
-	for (size_t o_i = 0; o_i < outgoing_used; o_i++) {
-		const struct range_info *r = &outgoing[o_i];
-		assert(!u64bitset_get(label_group_starts, r->start));
-		u64bitset_set(label_group_starts, r->start);
-		if (!append_edge(edges, r->dst_state)) {
-			return false;
-		}
-
-		for (uint8_t c = r->start; c <= r->end; c++) {
-			assert(!u64bitset_get(labels, r->start));
-			u64bitset_set(labels, c);
-		}
-	}
-
-	/* Precompute label_group_starts[] rank sums so lookup only needs to
-	 * compute rank for the label's word, not every word preceding it. */
-	rank_sums[0] = 0;
-	uint8_t total = 0;
-	for (size_t i = 1; i < 4; i++) {
-		total += u64bitset_popcount(label_group_starts[i - 1]);
-		rank_sums[i] = total;
-	}
-
-	return true;
-}
-
-struct endid_buf {
-	size_t ceil;
-	size_t used;
-	uint64_t *buf;
-};
-
-static bool
-append_endid(struct endid_buf *buf, uint64_t id)
-{
-	if (buf->used == buf->ceil) {
-		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
-		uint64_t *nendids = realloc(buf->buf, nceil * sizeof(nendids[0]));
-		assert(nendids != NULL);
-		buf->buf = nendids;
-		buf->ceil = nceil;
-	}
-
-	assert(buf->used < buf->ceil);
-	buf->buf[buf->used++] = id;
-	return true;
-}
-
-struct eager_output_buf {
-	size_t ceil;
-	size_t used;
-	uint64_t *buf;
-};
-
-static bool
-append_eager_output(struct eager_output_buf *buf, uint64_t id)
-{
-	if (buf->used == buf->ceil) {
-		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
-		uint64_t *neager_outputs = realloc(buf->buf, nceil * sizeof(neager_outputs[0]));
-		assert(neager_outputs != NULL);
-		buf->buf = neager_outputs;
-		buf->ceil = nceil;
-	}
-
-	assert(buf->used < buf->ceil);
-	buf->buf[buf->used++] = id;
-	return true;
-}
-
 static bool
 generate_data(FILE *f, const struct cdata_config *config,
 	bool comments, const char *prefix, const struct ir *ir)
 {
-	(void)f;
-	(void)config;
-	(void)prefix;
-	(void)ir;
-
-	struct dst_buf edges = { .ceil = config->non_default_edge_count };
-
-	edges.buf = malloc(config->non_default_edge_count * sizeof(edges.buf[0]));
-	assert(edges.buf != NULL);
-
-	struct endid_buf endid_buf = { .ceil = 0 };
-	uint64_t endids_prev = (uint64_t)-1;
-
-	struct eager_output_buf eager_output_buf = { .ceil = 0 };
-	uint64_t eager_outputs_prev = (uint64_t)-1;
-
 	fprintf(f,
 	    "\tstatic struct %s_cdata_dfa %s_dfa_data = {\n"
 	    "\t\t.start = %u,\n"
@@ -363,132 +230,47 @@ generate_data(FILE *f, const struct cdata_config *config,
 
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
 		const struct ir_state *s = &ir->states[s_i];
+		const struct state_info *si = &config->state_info[s_i];
+
 		const bool is_end = s->isend;
-		bool is_complete = false;
-		const bool has_endids = s->endids.count > 0;
-		const bool has_eager_outputs = s->eager_outputs != NULL && s->eager_outputs->count > 0;
-		uint64_t labels[256/64] = { 0 };
-		uint64_t label_group_starts[256/64] = { 0 };
-		uint8_t rank_sums[4] = { 0 };
-
-		const size_t edge_base = edges.used;
-		uint32_t default_dst = ((uint32_t)-1);
-
-		/* Offsets into the endid and eager_output tables
-		 * for where this state's IDs will appear, if any. */
-		size_t endids_base;
-		size_t eager_outputs_base;
-
-		if (s->endids.count > 0) {
-			/* If the first endid for this state is later than the last endid
-			 * appended, append an extra terminator 0 in-between them. Otherwise,
-			 * the last state that had endids will be falsely associated with
-			 * this state's as well.
-			 *
-			 * The numeric size used for endid offsets needs to account for this
-			 * padding, so add the state count (the worst case). */
-			if (s->endids.ids[0] > endids_prev) {
-				if (!append_endid(&endid_buf, 0)) { goto alloc_fail; }
-			}
-
-			endids_base = endid_buf.used;
-
-			/* TODO: Intern the run of endids. They are often identical
-			 * between states, so the earlier reference could be reused.
-			 * This is particulary important if they're all stored as
-			 * "unsigned" rather than reducing to the smallest numeric
-			 * type that fits all values used. */
-			for (size_t i = 0; i < s->endids.count; i++) {
-				if (!append_endid(&endid_buf, s->endids.ids[i])) {
-					goto alloc_fail;
-				}
-			}
-			endids_prev = s->endids.ids[s->endids.count - 1];
-		}
-
-		const size_t eo_count = s->eager_outputs == NULL ? 0 : s->eager_outputs->count;
-		if (eo_count > 0) {
-			/* Same as with endids_prev, above. */
-			if (s->eager_outputs->ids[0] > eager_outputs_prev) {
-				if (!append_eager_output(&eager_output_buf, 0)) {
-					goto alloc_fail;
-				}
-			}
-			eager_outputs_base = eager_output_buf.used;
-
-			/* TODO: Intern, emit reference to earlier set. */
-			for (size_t i = 0; i < eo_count; i++) {
-				if (!append_eager_output(&eager_output_buf, s->eager_outputs->ids[i])) {
-					goto alloc_fail;
-				}
-			}
-			eager_outputs_prev = s->eager_outputs->ids[eo_count - 1];
-		}
-
-		/* fprintf(stderr, "-- processing strategy for state %zd...\n", s_i); */
-
-		switch (s->strategy) {
-		case IR_NONE:
-			break;
-		case IR_SAME:	/* all default */
-			default_dst = s->u.same.to;
-			/* doesn't set any edges */
-			break;
-		case IR_COMPLETE:
-			is_complete = true;
-			if (!save_groups(s->u.complete.n, s->u.complete.groups, &edges, labels, label_group_starts, rank_sums)) {
-				goto alloc_fail;
-			}
-			break;
-		case IR_PARTIAL:
-		{
-			if (!save_groups(s->u.partial.n, s->u.partial.groups, &edges, labels, label_group_starts, rank_sums)) {
-				goto alloc_fail;
-			}
-			break;
-		}
-		case IR_DOMINANT:
-		{
-			/* fprintf(stderr, "-- dominant\n"); */
-			default_dst = s->u.dominant.mode;
-			if (!save_groups(s->u.dominant.n, s->u.dominant.groups, &edges, labels, label_group_starts, rank_sums)) {
-				goto alloc_fail;
-			}
-			break;
-		}
-		case IR_ERROR:
-			goto not_implemented;
-		case IR_TABLE:
-			goto not_implemented;
-		default:
-			goto not_implemented;
-		}
+		const bool has_endids = si->endid != STATE_OFFSET_NONE;
+		const bool has_eager_outputs = si->eager_output != STATE_OFFSET_NONE;
 
 		fprintf(f, "\t\t\t[%zd] = {%s\n", s_i, s_i == config->start ? " /* start */" : "");
 
 		/* These could comment with the label characters, but would need to be very careful with escaping. */
 		fprintf(f, "\t\t\t\t.labels = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
-		    labels[0], labels[1], labels[2], labels[3]);
+		    si->labels[0], si->labels[1], si->labels[2], si->labels[3]);
 		fprintf(f, "\t\t\t\t.label_group_starts = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
-		    label_group_starts[0], label_group_starts[1], label_group_starts[2], label_group_starts[3]);
+		    si->label_group_starts[0], si->label_group_starts[1], si->label_group_starts[2], si->label_group_starts[3]);
 
 		/* rank_sums[0] is always 0, but allows us to avoid a subtraction in the inner loop,
 		 * and the space would be wasted otherwise anyway due to alignment. */
 		fprintf(f, "\t\t\t\t.rank_sums = { %u, %u, %u, %u },\n",
-		    rank_sums[0], rank_sums[1], rank_sums[2], rank_sums[3]);
+		    si->rank_sums[0], si->rank_sums[1], si->rank_sums[2], si->rank_sums[3]);
 
-		if (default_dst == (uint32_t)-1) {
-			fprintf(f, "\t\t\t\t.default_dst = %zu /* NONE */,\n", config->state_count);
+		const size_t state_NONE = config->state_count;
+		const size_t dst_table_NONE = config->dst_buf.used;
+		const size_t endid_NONE = config->endid_buf.used;
+		const size_t eager_output_NONE = config->eager_output_buf.used;
+
+		if (si->default_dst == STATE_OFFSET_NONE) {
+			fprintf(f, "\t\t\t\t.default_dst = %zu /* NONE */,\n", state_NONE);
 		} else {
-			fprintf(f, "\t\t\t\t.default_dst = %u,\n", default_dst);
+			fprintf(f, "\t\t\t\t.default_dst = %zu,\n", si->default_dst);
 		}
 
 		fprintf(f, "\t\t\t\t.end = %d,\n", is_end);
-		fprintf(f, "\t\t\t\t.dst_table_offset = %zd,\n", edge_base);
+
+		if (si->dst == STATE_OFFSET_NONE) { /* no non-default outgoing edges */
+			fprintf(f, "\t\t\t\t.dst_table_offset = %zd, /* NONE */\n", dst_table_NONE);
+		} else {
+			fprintf(f, "\t\t\t\t.dst_table_offset = %zd,\n", si->dst);
+		}
 
 		/* Only include these if any state uses endids/eager_outputs, and
 		 * if this state doesn't then use the end of the array as NONE. */
-		if (config->endid_count > 0) {
+		if (config->endid_buf.used > 0) {
 			if (has_endids) {
 				if (comments) {
 					fprintf(f, "\t\t\t\t/* endids:");
@@ -500,14 +282,13 @@ generate_data(FILE *f, const struct cdata_config *config,
 					}
 					fprintf(f, " */\n");
 				}
-				fprintf(f, "\t\t\t\t.endid_offset = %zd,\n", endids_base);
+				fprintf(f, "\t\t\t\t.endid_offset = %zd,\n", si->endid);
 			} else {
-				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* NONE */\n", config->endid_count);
+				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* NONE */\n", endid_NONE);
 			}
-
 		}
 
-		if (config->eager_output_count > 0) {
+		if (config->eager_output_buf.used > 0) {
 			if (has_eager_outputs) {
 				if (comments) {
 					fprintf(f, "\t\t\t\t/* eager_outputs:");
@@ -519,9 +300,9 @@ generate_data(FILE *f, const struct cdata_config *config,
 					}
 					fprintf(f, " */\n");
 				}
-				fprintf(f, "\t\t\t\t.eager_output_offset = %zd,\n", eager_outputs_base);
+				fprintf(f, "\t\t\t\t.eager_output_offset = %zd,\n", si->eager_output);
 			} else {
-				fprintf(f, "\t\t\t\t.eager_output_offset = %zd, /* NONE */\n", config->eager_output_count);
+				fprintf(f, "\t\t\t\t.eager_output_offset = %zd, /* NONE */\n", eager_output_NONE);
 			}
 		}
 
@@ -532,29 +313,29 @@ generate_data(FILE *f, const struct cdata_config *config,
 	fprintf(f,
 	    "\t\t.dst_table = {");
 
-	for (size_t i = 0; i < edges.used; i++) {
+	for (size_t i = 0; i < config->dst_buf.used; i++) {
 		if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
-		fprintf(f, " %u,", edges.buf[i]);
+		fprintf(f, " %u,", config->dst_buf.buf[i]);
 	}
 
 	/* edges */
 	fprintf(f, "\n\t\t},\n");
 
-	if (endid_buf.used > 0) {
+	if (config->endid_buf.used > 0) {
 		fprintf(f, "\t\t.endid_table = {");
-		for (size_t i = 0; i < endid_buf.used; i++) {
+		for (size_t i = 0; i < config->endid_buf.used; i++) {
 			if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
-			fprintf(f, " %lu,", endid_buf.buf[i]);
+			fprintf(f, " %lu,", config->endid_buf.buf[i]);
 		}
 		fprintf(f, "\n\t\t\t 0 /* end */,\n");
 		fprintf(f, "\n\t\t},\n");
 	}
 
-	if (eager_output_buf.used > 0) {
+	if (config->eager_output_buf.used > 0) {
 		fprintf(f, "\t\t.eager_output_table = {");
-		for (size_t i = 0; i < eager_output_buf.used; i++) {
+		for (size_t i = 0; i < config->eager_output_buf.used; i++) {
 			if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
-			fprintf(f, " %lu,", eager_output_buf.buf[i]);
+			fprintf(f, " %lu,", config->eager_output_buf.buf[i]);
 		}
 		fprintf(f, "\n\t\t\t 0 /* end */,\n");
 		fprintf(f, "\n\t\t},\n");
@@ -562,19 +343,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 
 	fprintf(f, "\t};\n");
 
-	free(edges.buf);
-	free(endid_buf.buf);
-	free(eager_output_buf.buf);
-
 	return true;
-
-not_implemented:
-	assert(!"not implemented");
-	return false;
-
-alloc_fail:
-	assert(!"alloc fail");
-	return false;
 }
 
 static void
@@ -583,7 +352,7 @@ generate_eager_output_check(FILE *f, const struct cdata_config *config, const ch
 	/* If any states have eager outputs, check if the current state
 	 * does, and if so, set their flags. This assumes eager_output_buf is large enough,
 	 * and is a strong incentive to use sequentially assigned IDs. */
-	if (config->eager_output_count > 0) {
+	if (config->eager_output_buf.used > 0) {
 		fprintf(f,
 		    "\n"
 		    "\t\tif (state->eager_output_offset < %s_EAGER_OUTPUT_TABLE_COUNT) {\n"
@@ -612,16 +381,17 @@ generate_eager_output_check(FILE *f, const struct cdata_config *config, const ch
 static bool
 generate_interpreter(FILE *f, const struct cdata_config *config, const struct fsm_options *opt, const char *prefix)
 {
-	(void)config;
-	fprintf(f, "\tconst size_t %s_STATE_COUNT = %zd;\n", prefix, config->state_count);
-	/* fprintf(f, "\tconst size_t %s_EDGE_COUNT = %zd;\n", prefix, config->non_default_edge_count); */
+	const bool has_endids = config->endid_buf.used > 0;
+	const bool has_eager_outputs = config->eager_output_buf.used > 0;
 
-	if (config->endid_count > 0) {
-		fprintf(f, "\tconst size_t %s_ENDID_TABLE_COUNT = %zd;\n", prefix, config->endid_count);
+	fprintf(f, "\tconst size_t %s_STATE_COUNT = %zd;\n", prefix, config->state_count);
+
+	if (has_endids) {
+		fprintf(f, "\tconst size_t %s_ENDID_TABLE_COUNT = %zd;\n", prefix, config->endid_buf.used);
 	}
 
-	if (config->eager_output_count > 0) {
-		fprintf(f, "\tconst size_t %s_EAGER_OUTPUT_TABLE_COUNT = %zd;\n", prefix, config->eager_output_count);
+	if (has_eager_outputs) {
+		fprintf(f, "\tconst size_t %s_EAGER_OUTPUT_TABLE_COUNT = %zd;\n", prefix, config->eager_output_buf.used);
 	}
 
 	/* start state */
@@ -731,7 +501,7 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\tif (!state->end) { return 0; /* no match */ }\n", prefix, prefix);
 
 	/* Set the passed-in reference to the endids, if any. */
-	if (config->endid_count > 0) {
+	if (has_endids) {
 		/* If there are endids in the DFA, check if the current state's
 		 * endid_offset is in range. (If not, the state has none.)
 		 * Those endids appear in as a run of ascending values in
@@ -773,88 +543,288 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 }
 
 static bool
+append_endid(struct endid_buf *buf, uint64_t id)
+{
+	if (buf->used == buf->ceil) {
+		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
+		uint64_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
+		if (nbuf == NULL) { return false; }
+		buf->buf = nbuf;
+		buf->ceil = nceil;
+	}
+
+	assert(buf->used < buf->ceil);
+	buf->buf[buf->used++] = id;
+	return true;
+}
+
+static bool
+save_state_endids(struct cdata_config *config, const struct ir_state_endids *endids, size_t *offset)
+{
+	if (endids->count == 0) {
+		assert(*offset == STATE_OFFSET_NONE);
+		return true;
+	}
+
+	/* If the first endid for this state is later than the last
+	 * endid in the buffer, append an extra terminator 0 for the
+	 * last run of endids. Otherwise, the last state with endids
+	 * will be falsely associated with this state's as well. */
+	if (config->endid_buf.used > 0
+	    && endids->ids[0] > config->endid_buf.buf[config->endid_buf.used - 1]) {
+		if (!append_endid(&config->endid_buf, 0)) {
+			return false;
+		}
+	}
+
+	const size_t base = config->endid_buf.used;
+
+	/* TODO: Intern the run of endids. They are often identical
+	 * between states, so the earlier reference could be reused.
+	 * This is particulary important since they're all stored as
+	 * "unsigned" rather than reducing to the smallest numeric
+	 * type that fits all values used. */
+	for (size_t i = 0; i < endids->count; i++) {
+		if (endids->ids[i] > config->max_endid) {
+			config->max_endid = endids->ids[i];
+		}
+		if (!append_endid(&config->endid_buf, endids->ids[i])) {
+			return false;
+		}
+	}
+
+	assert(base != STATE_OFFSET_NONE);
+	*offset = base;
+	return true;
+}
+
+static bool
+append_eager_output(struct eager_output_buf *buf, uint64_t id)
+{
+	if (buf->used == buf->ceil) {
+		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
+		uint64_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
+		assert(nbuf != NULL);
+		buf->buf = nbuf;
+		buf->ceil = nceil;
+	}
+
+	assert(buf->used < buf->ceil);
+	buf->buf[buf->used++] = id;
+	return true;
+}
+
+static bool
+save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eager_output *eager_outputs, size_t *offset)
+{
+	if (eager_outputs == NULL || eager_outputs->count == 0) {
+		assert(*offset == STATE_OFFSET_NONE);
+		return true;
+	}
+
+	/* If necessary add a 0, as in save_state_endids above. */
+	if (config->eager_output_buf.used > 0
+	    && eager_outputs->ids[0] > config->eager_output_buf.buf[config->eager_output_buf.used - 1]) {
+		if (!append_eager_output(&config->eager_output_buf, 0)) {
+			return false;
+		}
+	}
+
+	const size_t base = config->eager_output_buf.used;
+
+	/* TODO: intern. */
+	for (size_t i = 0; i < eager_outputs->count; i++) {
+		if (eager_outputs->ids[i] > config->max_eager_output_id) {
+			config->max_eager_output_id = eager_outputs->ids[i];
+		}
+
+		if (!append_eager_output(&config->eager_output_buf, eager_outputs->ids[i])) {
+			return false;
+		}
+	}
+
+	assert(base != STATE_OFFSET_NONE);
+	*offset = base;
+	return true;
+}
+
+struct range_info {
+	uint8_t start;
+	uint8_t end;
+	uint32_t dst_state;
+};
+
+static int
+cmp_outgoing(const void *pa, const void *pb)
+{
+	const struct range_info *a = (const struct range_info *)pa;
+	const struct range_info *b = (const struct range_info *)pb;
+	return a->start < b->start ? -1 : a->start > b->start ? 1 : 0;
+}
+
+static bool
+append_dst(struct dst_buf *buf, uint32_t dst)
+{
+	if (buf->used == buf->ceil) {
+		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
+		uint32_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
+		assert(nbuf != NULL);
+		buf->buf = nbuf;
+		buf->ceil = nceil;
+	}
+
+	assert(buf->used < buf->ceil);
+	buf->buf[buf->used++] = dst;
+	return true;
+}
+
+static bool
+save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *si,
+	size_t group_count, const struct ir_group *groups)
+{
+	/* TODO Intern the edge_group -> dst_state sets, this should
+	 * use the same backward chaining search index approach that
+	 * heatshrink uses, and since the DFA is trimmed all states
+	 * should have at least one edge leading to them: it doesn't
+	 * need to be sparse. Making the dst_state table smaller will
+	 * improve locality and make it faster. */
+
+	/* Convert the group ranges to bitsets and an edge->destination state list. */
+#define DUMP_GROUP 0
+	if (DUMP_GROUP) {
+		fprintf(stderr, "\n%s: dump_group [[\n", __func__);
+		for (size_t g_i = 0; g_i < group_count; g_i++) {
+			fprintf(stderr, "- group %zd:\n", g_i);
+			const struct ir_group *g = &groups[g_i];
+			for (size_t r_i = 0; r_i < g->n; r_i++) {
+				const struct ir_range *r = &g->ranges[r_i];
+				assert(r->start <= r->end);
+				fprintf(stderr, "  - range[%zd]: '%c'(0x%02x) -- '%c'(0x%02x)\n",
+				    r_i,
+				    isprint(r->start) ? r->start : '.', r->start,
+				    isprint(r->end) ? r->end : '.', r->end);
+			}
+		}
+		fprintf(stderr, "]]\n");
+	}
+
+	/* Because this is a DFA there should be at most 256 outgoing. */
+	size_t outgoing_used = 0;
+	struct range_info outgoing[256];
+
+	/* Groups and ranges aren't necessarily ordered by character, so collect and sort first,
+	 * otherwise the ranks can point to the wrong offset in edges[]. */
+	for (size_t g_i = 0; g_i < group_count; g_i++) {
+		const struct ir_group *g = &groups[g_i];
+		for (size_t r_i = 0; r_i < g->n; r_i++) {
+			const struct ir_range *r = &g->ranges[r_i];
+			assert(r->start <= r->end);
+			outgoing[outgoing_used++] = (struct range_info){
+				.start = r->start,
+				.end = r->end,
+				.dst_state = g->to,
+			};
+			assert(outgoing_used <= 256);
+		}
+	}
+
+	/* Sort them by .start. They should be unique and non-overlapping. */
+	qsort(outgoing, outgoing_used, sizeof(outgoing[0]), cmp_outgoing);
+	for (size_t o_i = 1; o_i < outgoing_used; o_i++) {
+		assert(outgoing[o_i - 1].start < outgoing[o_i].start);
+	}
+
+	for (size_t i = 0; i < 4; i++) {
+		si->labels[i] = 0;
+		si->label_group_starts[i] = 0;
+	}
+
+	const size_t base = dst_buf->used;
+
+	for (size_t o_i = 0; o_i < outgoing_used; o_i++) {
+		const struct range_info *r = &outgoing[o_i];
+		assert(!u64bitset_get(si->label_group_starts, r->start));
+		u64bitset_set(si->label_group_starts, r->start);
+		if (!append_dst(dst_buf, r->dst_state)) {
+			return false;
+		}
+
+		for (uint8_t c = r->start; c <= r->end; c++) {
+			assert(!u64bitset_get(si->labels, r->start));
+			u64bitset_set(si->labels, c);
+		}
+	}
+
+	/* Precompute label_group_starts[] rank sums so lookup only needs to
+	 * compute rank for the label's word, not every word preceding it. */
+	si->rank_sums[0] = 0;
+	uint8_t total = 0;
+	for (size_t i = 1; i < 4; i++) {
+		total += u64bitset_popcount(si->label_group_starts[i - 1]);
+		si->rank_sums[i] = total;
+	}
+
+	assert(base != STATE_OFFSET_NONE);
+	si->dst = base;
+	return true;
+}
+
+static bool
 populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 {
 	memset(config, 0x00, sizeof(*config));
 	config->start = ir->start;
 	config->state_count = ir->n;
 
-	size_t max_endid = 0;
-	size_t max_eager_output_id = 0;
+	config->state_info = malloc(ir->n * sizeof(config->state_info[0]));
+	assert(config->state_info != NULL);
+
+	/* could just memset this to 0xff, but this is explicit */
+	for (size_t s_i = 0; s_i < ir->n; s_i++) {
+		struct state_info *si = &config->state_info[s_i];
+		si->dst = STATE_OFFSET_NONE;
+		si->default_dst = STATE_OFFSET_NONE;
+		si->endid = STATE_OFFSET_NONE;
+		si->eager_output = STATE_OFFSET_NONE;
+	}
 
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
 		const struct ir_state *s = &ir->states[s_i];
 
-		/* TODO: intern the endid sets here, to determine upfront
-		 * the endid table size and offset numeric type. */
-		config->endid_count += s->endids.count;
-		for (size_t i = 0; i < s->endids.count; i++) {
-			if (s->endids.ids[i] > max_endid) {
-				max_endid = s->endids.ids[i];
-			}
+		if (!save_state_endids(config, &s->endids, &config->state_info[s_i].endid)) {
+			goto alloc_fail;
 		}
 
-		/* TODO: intern the eager_output sets too */
-		const size_t eo_count = s->eager_outputs == NULL
-		    ? 0
-		    : s->eager_outputs->count;
-		config->eager_output_count += eo_count;
-		for (size_t i = 0; i < eo_count; i++) {
-			if (s->eager_outputs->ids[i] > max_eager_output_id) {
-				max_eager_output_id = s->eager_outputs->ids[i];
-			}
+		if (!save_state_eager_outputs(config, s->eager_outputs, &config->state_info[s_i].eager_output)) {
+			goto alloc_fail;
 		}
 
-		/* TODO also intern the destination sets, this should
-		 * use the same backward chaining search index approach that
-		 * heatshrink uses, and since the DFA is trimmed all states
-		 * should have at least one edge leading to them: it doesn't
-		 * need to be sparse. */
+		struct state_info *si = &config->state_info[s_i];
+
 		switch (s->strategy) {
 		case IR_NONE:
-			config->non_default_edge_count += 0;
 			break;
 		case IR_SAME:	/* all default */
-			config->non_default_edge_count += 0;
+			config->state_info[s_i].default_dst = s->u.same.to;
 			break;
 		case IR_COMPLETE:
-			config->non_default_edge_count += 256;
+			if (!save_state_edge_group_destinations(&config->dst_buf,
+				si, s->u.complete.n, s->u.complete.groups)) {
+				goto alloc_fail;
+			}
 			break;
 		case IR_PARTIAL:
-		{
-			size_t state_total = 0;
-			for (size_t g_i = 0; g_i < s->u.partial.n; g_i++) {
-				const struct ir_group *g = &s->u.partial.groups[g_i];
-				config->group_count++;
-				config->range_count += g->n;
-				for (size_t r_i = 0; r_i < g->n; r_i++) {
-					const struct ir_range *r = &g->ranges[r_i];
-					assert(r->end >= r->start);
-					state_total += r->end - r->start + 1;
-				}
+			if (!save_state_edge_group_destinations(&config->dst_buf,
+				si, s->u.partial.n, s->u.partial.groups)) {
+				goto alloc_fail;
 			}
-			assert(state_total <= 256);
-			config->non_default_edge_count += state_total;
 			break;
-		}
 		case IR_DOMINANT:
-		{
-			/* not counting the mode, which will become the default */
-			size_t state_total = 0;
-			for (size_t g_i = 0; g_i < s->u.dominant.n; g_i++) {
-				const struct ir_group *g = &s->u.dominant.groups[g_i];
-				config->group_count++;
-				config->range_count += g->n;
-				for (size_t r_i = 0; r_i < g->n; r_i++) {
-					const struct ir_range *r = &g->ranges[r_i];
-					assert(r->end >= r->start);
-					state_total += r->end - r->start + 1;
-				}
+			if (!save_state_edge_group_destinations(&config->dst_buf,
+				si, s->u.dominant.n, s->u.dominant.groups)) {
+				goto alloc_fail;
 			}
-			assert(state_total <= 256);
-			config->non_default_edge_count += state_total;
-			break;
-		}
+			config->state_info[s_i].default_dst = s->u.dominant.mode;
 			break;
 		case IR_ERROR:
 			goto not_implemented;
@@ -873,24 +843,26 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 	config->t_state_id = size_needed(config->state_count + 1);
 
 	/* Offset into the dst_state table. */
-	config->t_dst_state_offset = size_needed(config->non_default_edge_count);
+	config->t_dst_state_offset = size_needed(config->dst_buf.used);
 
-	/* These two add the state count to handle the worst-case where every state
-	 * after the first needs a 0 terminator. See the comment for endids_prev above.
-	 * Both of these also ensure there's space for at least one out-of-band value
+	/* Both of these also ensure there's space for at least one out-of-band value
 	 * to use as "NONE". */
-	config->t_endid_offset = size_needed(config->endid_count + config->state_count + 1);
-	config->t_eager_output_offset = size_needed(config->eager_output_count + config->state_count + 1);
+	config->t_endid_offset = size_needed(config->endid_buf.used + 1);
+	config->t_eager_output_offset = size_needed(config->eager_output_buf.used + 1);
 
 	/* The caller expects this to be unsigned, and the current interface just sets
 	 * a pointer to the array of IDs. */
-	config->t_endid_value = UNSIGNED; //size_needed(max_endid);
+	config->t_endid_value = UNSIGNED; //size_needed(config->max_endid);
 
-	config->t_eager_output_value = size_needed(max_eager_output_id);
+	config->t_eager_output_value = size_needed(config->max_eager_output_id);
 	return true;
 
 not_implemented:
 	assert(!"not implemented");
+	return false;
+
+alloc_fail:
+	assert(!"alloc fail");
 	return false;
 }
 
@@ -911,13 +883,12 @@ fsm_print_cdata(FILE *f,
 	struct cdata_config config;
 	populate_config_from_ir(&config, ir);
 
-	fprintf(stderr, "// config: state_count %zu, start %d, non_default_edge_count %zd, endid_count %zd, eager_output_count %zd, group_cound %zd, range_count %zd\n",
+	fprintf(stderr, "// config: dst_state_count %zu, start %d, dst_buf.used %zd, endid_buf.used %zd, eager_output_buf.used %zd\n",
 	    config.state_count,
 	    config.start,
-	    config.non_default_edge_count,
-	    config.endid_count,
-	    config.eager_output_count,
-	    config.group_count, config.range_count);
+	    config.dst_buf.used,
+	    config.endid_buf.used,
+	    config.eager_output_buf.used);
 
 	const char *prefix;
 	if (opt->prefix != NULL) {
@@ -947,7 +918,7 @@ fsm_print_cdata(FILE *f,
 		}
 
 		/* TODO: add an opt flag for eager_output codegen */
-		if (config.eager_output_count > 0) {
+		if (config.eager_output_buf.used > 0) {
 			fprintf(f, ",\n");
 			fprintf(f, "\tuint64_t *eager_output_buf");
 		}
@@ -1000,18 +971,10 @@ fsm_print_cdata(FILE *f,
 		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
 	}
 
-#if 0
-	if (opt->fragment) {
-		/* generate struct definitions */
-		/* generate size-specialized interpreter, inside guards */
-
-		if (!print_cdata_body(f, ir, opt, hooks)) {
-			return -1;
-		}
-	} else {
-		assert(!"todo");
-	}
-#endif
+	free(config.dst_buf.buf);
+	free(config.endid_buf.buf);
+	free(config.eager_output_buf.buf);
+	free(config.state_info);
 
 	return 0;
 }
