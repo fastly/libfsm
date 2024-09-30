@@ -811,9 +811,6 @@ save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *s
 		const struct range_info *r = &outgoing[o_i];
 		assert(!u64bitset_get(si->label_group_starts, r->start));
 		u64bitset_set(si->label_group_starts, r->start);
-		if (!append_dst(dst_buf, r->dst_state)) {
-			return false;
-		}
 
 		for (uint8_t c = r->start; c <= r->end; c++) {
 			assert(!u64bitset_get(si->labels, r->start));
