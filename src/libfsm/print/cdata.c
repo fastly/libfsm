@@ -30,6 +30,20 @@
 
 #include "ir.h"
 
+/* Whether to check the table buffers for previous instances of
+ * the same sets of dst_states, endids, or eager_outputs. This
+ * should always be an improvement, making the generated code
+ * smaller and improve locality. */
+#define REUSE_ALL_SETS 1
+#define REUSE_DST_TABLE_SETS (REUSE_ALL_SETS || 1)
+#define REUSE_ENDID_SETS (REUSE_ALL_SETS || 1)
+#define REUSE_EAGER_OUTPUT_SETS (REUSE_ALL_SETS || 1)
+
+/* If reusing sets, use a simplistic and inefficient (but easily checked)
+ * implementation. If EXPENSIVE_CHECKS is set this will still be used, to check
+ * the result of the more efficient approaches. */
+#define REUSE_NAIVE 1
+
 /* Print mode that generates C data literals for the DFA, plus a small interepreter.
  * This mostly exists to sidestep very expensive compilation for large data sets
  * using the other C modes. -sv */
@@ -99,7 +113,7 @@ struct cdata_config {
 	struct endid_buf {
 		size_t ceil;
 		size_t used;
-		uint64_t *buf;
+		unsigned *buf;
 	} endid_buf;
 	size_t max_endid;
 
@@ -325,7 +339,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 		fprintf(f, "\t\t.endid_table = {");
 		for (size_t i = 0; i < config->endid_buf.used; i++) {
 			if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
-			fprintf(f, " %lu,", config->endid_buf.buf[i]);
+			fprintf(f, " %u,", config->endid_buf.buf[i]);
 		}
 		fprintf(f, "\n\t\t\t 0 /* end */,\n");
 		fprintf(f, "\n\t\t},\n");
@@ -547,7 +561,7 @@ append_endid(struct endid_buf *buf, uint64_t id)
 {
 	if (buf->used == buf->ceil) {
 		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
-		uint64_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
+		unsigned *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
 		if (nbuf == NULL) { return false; }
 		buf->buf = nbuf;
 		buf->ceil = nceil;
@@ -566,6 +580,42 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 		return true;
 	}
 
+#if REUSE_ENDID_SETS
+	/* Intern the run of endids. They are often identical
+	 * between states, so the earlier reference could be reused.
+	 * This is particulary important since they're all stored as
+	 * "unsigned" rather than reducing to the smallest numeric
+	 * type that fits all values used. */
+
+#if REUSE_NAIVE || EXPENSIVE_CHECKS
+	/* Search for a previous run of the same endids in the buffer via linear scan.
+	 * This is simple but scales poorly. */
+	size_t naive_offset = STATE_OFFSET_NONE;
+	for (size_t b_i = 0; b_i < config->endid_buf.used; b_i++) {
+		size_t e_i;
+		for (e_i = 0; e_i < endids->count; e_i++) {
+			if (b_i + e_i >= config->endid_buf.used) {
+				break; /* reached the end, not found */
+			}
+			if (config->endid_buf.buf[b_i + e_i] != endids->ids[e_i]) {
+				break; /* mismatch */
+			}
+		}
+		if (e_i == endids->count) { /* got a match */
+			naive_offset = b_i;
+			break;
+		}
+	}
+
+	if (REUSE_NAIVE) {
+		*offset = naive_offset;
+		return true;
+	}
+#endif
+
+	/* TODO: better impl */
+#endif
+
 	/* If the first endid for this state is later than the last
 	 * endid in the buffer, append an extra terminator 0 for the
 	 * last run of endids. Otherwise, the last state with endids
@@ -579,11 +629,6 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 
 	const size_t base = config->endid_buf.used;
 
-	/* TODO: Intern the run of endids. They are often identical
-	 * between states, so the earlier reference could be reused.
-	 * This is particulary important since they're all stored as
-	 * "unsigned" rather than reducing to the smallest numeric
-	 * type that fits all values used. */
 	for (size_t i = 0; i < endids->count; i++) {
 		if (endids->ids[i] > config->max_endid) {
 			config->max_endid = endids->ids[i];
@@ -621,6 +666,35 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 		assert(*offset == STATE_OFFSET_NONE);
 		return true;
 	}
+
+#if REUSE_EAGER_OUTPUT_SETS
+#if REUSE_NAIVE || EXPENSIVE_CHECKS
+	/* Linear scan. See comments about reuse in save_state_endids. */
+	size_t naive_offset = STATE_OFFSET_NONE;
+	for (size_t b_i = 0; b_i < config->eager_output_buf.used; b_i++) {
+		size_t e_i;
+		for (e_i = 0; e_i < eager_outputs->count; e_i++) {
+			if (b_i + e_i >= config->eager_output_buf.used) {
+				break; /* reached the end, not found */
+			}
+			if (config->eager_output_buf.buf[b_i + e_i] != eager_outputs->ids[e_i]) {
+				break; /* mismatch */
+			}
+		}
+		if (e_i == eager_outputs->count) { /* got a match */
+			naive_offset = b_i;
+			break;
+		}
+	}
+
+	if (REUSE_NAIVE) {
+		*offset = naive_offset;
+		return true;
+	}
+#endif
+
+	/* TODO: better impl */
+#endif
 
 	/* If necessary add a 0, as in save_state_endids above. */
 	if (config->eager_output_buf.used > 0
@@ -682,13 +756,6 @@ static bool
 save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *si,
 	size_t group_count, const struct ir_group *groups)
 {
-	/* TODO Intern the edge_group -> dst_state sets, this should
-	 * use the same backward chaining search index approach that
-	 * heatshrink uses, and since the DFA is trimmed all states
-	 * should have at least one edge leading to them: it doesn't
-	 * need to be sparse. Making the dst_state table smaller will
-	 * improve locality and make it faster. */
-
 	/* Convert the group ranges to bitsets and an edge->destination state list. */
 #define DUMP_GROUP 0
 	if (DUMP_GROUP) {
@@ -739,8 +806,7 @@ save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *s
 		si->label_group_starts[i] = 0;
 	}
 
-	const size_t base = dst_buf->used;
-
+	/* First pass: populate the bitsets. */
 	for (size_t o_i = 0; o_i < outgoing_used; o_i++) {
 		const struct range_info *r = &outgoing[o_i];
 		assert(!u64bitset_get(si->label_group_starts, r->start));
@@ -762,6 +828,51 @@ save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *s
 	for (size_t i = 1; i < 4; i++) {
 		total += u64bitset_popcount(si->label_group_starts[i - 1]);
 		si->rank_sums[i] = total;
+	}
+
+	/* Second pass: search for an previous intance of the same run
+	 * of destination states in dst_buf, reusing that if possible. */
+#if REUSE_DST_TABLE_SETS
+#if REUSE_NAIVE || EXPENSIVE_CHECKS
+	/* Linear scan. See comments about reuse in save_state_endids. */
+	size_t naive_offset = STATE_OFFSET_NONE;
+	for (size_t b_i = 0; b_i < dst_buf->used; b_i++) {
+		size_t o_i;
+		for (o_i = 0; o_i < outgoing_used; o_i++) {
+			if (b_i + o_i >= dst_buf->used) {
+				break; /* reached the end, not found */
+			}
+			if (dst_buf->buf[b_i + o_i] != outgoing[o_i].dst_state) {
+				break; /* mismatch */
+			}
+		}
+		if (o_i == outgoing_used) { /* got a match */
+			naive_offset = b_i;
+			break;
+		}
+	}
+
+	if (REUSE_NAIVE) {
+		si->dst = naive_offset;
+		return true;
+	}
+#endif
+
+	/* TODO: Better implementation. This should use the same
+	 * backward chaining search index approach that heatshrink uses,
+	 * and since the DFA is trimmed all states should have at least
+	 * one edge leading to them: it doesn't need to be sparse.
+	 * Making the dst_state table smaller will improve locality and
+	 * make it faster. */
+#endif
+
+	/* Otherwise, append the destination states to dst_buf. */
+	const size_t base = dst_buf->used;
+	for (size_t o_i = 0; o_i < outgoing_used; o_i++) {
+		const struct range_info *r = &outgoing[o_i];
+		if (!append_dst(dst_buf, r->dst_state)) {
+			return false;
+		}
 	}
 
 	assert(base != STATE_OFFSET_NONE);
