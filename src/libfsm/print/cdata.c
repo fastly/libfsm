@@ -269,9 +269,29 @@ generate_data(FILE *f, const struct cdata_config *config,
 
 		fprintf(f, "\t\t\t[%zd] = {%s\n", s_i, s_i == config->start ? " /* start */" : "");
 
-		/* These could comment with the label characters, but would need to be very careful with escaping. */
+		if (comments) {
+			fprintf(f, "\t\t\t\t// ");
+			for (size_t i = 0; i < 256; i++) {
+				if (si->labels[i/64] & ((uint64_t)1 << (i & 63))) {
+					char c = (char)i;
+					fprintf(f, "%c", isprint(c) ? c : '.');
+				}
+			}
+			fprintf(f, "\n");
+		}
 		fprintf(f, "\t\t\t\t.labels = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
 		    si->labels[0], si->labels[1], si->labels[2], si->labels[3]);
+
+		if (comments) {
+			fprintf(f, "\t\t\t\t// ");
+			for (size_t i = 0; i < 256; i++) {
+				if (si->label_group_starts[i/64] & ((uint64_t)1 << (i & 63))) {
+					char c = (char)i;
+					fprintf(f, "%c", isprint(c) ? c : '.');
+				}
+			}
+			fprintf(f, "\n");
+		}
 		fprintf(f, "\t\t\t\t.label_group_starts = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
 		    si->label_group_starts[0], si->label_group_starts[1], si->label_group_starts[2], si->label_group_starts[3]);
 
