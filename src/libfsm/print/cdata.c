@@ -585,6 +585,11 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 		return true;
 	}
 
+	/* Special case: if the set is [0], don't reuse a bare 0 unless it
+	 * has a 0 terminator after, because otherwise that offset will be
+	 * unintentionally combined with the next values. */
+	const bool single_0 = endids->count == 1 && endids->ids[0] == 0;
+
 #if REUSE_ENDID_SETS
 	/* Intern the run of endids. They are often identical
 	 * between states, so the earlier reference could be reused.
@@ -607,8 +612,12 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 			}
 		}
 		if (e_i == endids->count) { /* got a match */
-			naive_offset = b_i;
-			break;
+			if (!single_0 ||
+			    /* the 0 has a 0 terminator */
+			    (b_i + 2 < config->endid_buf.used && config->endid_buf.buf[b_i + 2] == 0)) {
+				naive_offset = b_i;
+				break;
+			}
 		}
 	}
 
@@ -683,6 +692,9 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 		return true;
 	}
 
+	/* See single_0 in save_state_endids. */
+	const bool single_0 = eager_outputs->count == 1 && eager_outputs->ids[0] == 0;
+
 #if REUSE_EAGER_OUTPUT_SETS
 #if REUSE_NAIVE || EXPENSIVE_CHECKS
 	/* Linear scan. See comments about reuse in save_state_endids. */
@@ -698,8 +710,12 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 			}
 		}
 		if (e_i == eager_outputs->count) { /* got a match */
-			naive_offset = b_i;
-			break;
+			if (!single_0 ||
+			    /* the 0 has a 0 terminator */
+			    (b_i + 2 < config->endid_buf.used && config->endid_buf.buf[b_i + 2] == 0)) {
+				naive_offset = b_i;
+				break;
+			}
 		}
 	}
 
