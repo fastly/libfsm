@@ -860,8 +860,6 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 		si->label_group_starts[i] = 0;
 	}
 
-	struct dst_buf *dst_buf = &config->dst_buf;
-
 	/* First pass: populate the bitsets. */
 	for (size_t o_i = 0; o_i < outgoing_used; o_i++) {
 		const struct range_info *r = &outgoing[o_i];
