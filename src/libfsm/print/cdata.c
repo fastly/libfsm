@@ -365,7 +365,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 	    "\t\t.dst_table = {");
 
 	for (size_t i = 0; i < config->dst_buf.used; i++) {
-		if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
+		if ((i & 15) == 0) { fprintf(f, "\n\t\t\t"); }
 		fprintf(f, " %u,", config->dst_buf.buf[i]);
 	}
 
@@ -375,7 +375,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 	if (config->endid_buf.used > 0) {
 		fprintf(f, "\t\t.endid_table = {");
 		for (size_t i = 0; i < config->endid_buf.used; i++) {
-			if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
+			if ((i & 15) == 0) { fprintf(f, "\n\t\t\t"); }
 			fprintf(f, " %u,", config->endid_buf.buf[i]);
 		}
 		fprintf(f, "\n\t\t\t 0 /* end */,\n");
@@ -385,7 +385,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 	if (config->eager_output_buf.used > 0) {
 		fprintf(f, "\t\t.eager_output_table = {");
 		for (size_t i = 0; i < config->eager_output_buf.used; i++) {
-			if ((i & 31) == 0) { fprintf(f, "\n\t\t\t"); }
+			if ((i & 15) == 0) { fprintf(f, "\n\t\t\t"); }
 			fprintf(f, " %lu,", config->eager_output_buf.buf[i]);
 		}
 		fprintf(f, "\n\t\t\t 0 /* end */,\n");
