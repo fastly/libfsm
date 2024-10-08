@@ -617,6 +617,11 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 		return true;
 	}
 
+	/* These must be in ascending order. */
+	for (size_t i = 1; i < endids->count; i++) {
+		assert(endids->ids[i - 1] < endids->ids[i]);
+	}
+
 #if REUSE_ENDID_SETS
 	/* Intern the run of endids. They are often identical
 	 * between states, so the earlier reference could be reused.
@@ -718,6 +723,11 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 	if (eager_outputs == NULL || eager_outputs->count == 0) {
 		assert(*offset == STATE_OFFSET_NONE);
 		return true;
+	}
+
+	/* These must be in ascending order. */
+	for (size_t i = 1; i < eager_outputs->count; i++) {
+		assert(eager_outputs->ids[i - 1] < eager_outputs->ids[i]);
 	}
 
 #if REUSE_EAGER_OUTPUT_SETS
