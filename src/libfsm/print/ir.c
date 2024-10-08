@@ -515,6 +515,14 @@ append_eager_output_cb(fsm_state_t state, fsm_output_id_t id, void *opaque)
 	return 1;
 }
 
+static int
+cmp_fsm_output_id_t(const void *pa, const void *pb)
+{
+	const fsm_output_id_t a = *(fsm_output_id_t *)pa;
+	const fsm_output_id_t b = *(fsm_output_id_t *)pb;
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
 struct ir *
 make_ir(const struct fsm *fsm, const struct fsm_options *opt)
 {
@@ -589,6 +597,7 @@ make_ir(const struct fsm *fsm, const struct fsm_options *opt)
 			outputs->count = 0;
 			fsm_eager_output_iter_state(fsm, i, append_eager_output_cb, outputs);
 			assert(outputs->count == count);
+			qsort(outputs->ids, outputs->count, sizeof(outputs->ids[0]), cmp_fsm_output_id_t);
 			ir->states[i].eager_outputs = outputs;
 		}
 

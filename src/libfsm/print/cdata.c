@@ -267,6 +267,18 @@ generate_data(FILE *f, const struct cdata_config *config,
 		const bool has_endids = si->endid != STATE_OFFSET_NONE;
 		const bool has_eager_outputs = si->eager_output != STATE_OFFSET_NONE;
 
+		/* both sets of IDs must be in ascending order */
+		if (has_endids) {
+			for (size_t i = 1; i < s->endids.count; i++) {
+				assert(s->endids.ids[i - 1] < s->endids.ids[i]);
+			}
+		}
+		if (has_eager_outputs) {
+			for (size_t i = 1; i < s->eager_outputs->count; i++) {
+				assert(s->eager_outputs->ids[i - 1] < s->eager_outputs->ids[i]);
+			}
+		}
+
 		fprintf(f, "\t\t\t[%zd] = {%s\n", s_i, s_i == config->start ? " /* start */" : "");
 
 		if (comments) {
