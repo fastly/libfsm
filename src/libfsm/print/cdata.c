@@ -34,8 +34,13 @@
  * the same sets of dst_states, endids, or eager_outputs. This
  * should always be an improvement, making the generated code
  * smaller and improve locality. */
-#define REUSE_ALL_SETS 1
-#define REUSE_DST_TABLE_SETS (REUSE_ALL_SETS || 1)
+#define REUSE_ALL_SETS 0
+
+/* Disabled for now. Linear scan for this is too slow, whereas
+ * it's fine for the other two, and reuse makes a much bigger
+ * difference for those. */
+#define REUSE_DST_TABLE_SETS (REUSE_ALL_SETS || 0)
+
 #define REUSE_ENDID_SETS (REUSE_ALL_SETS || 1)
 #define REUSE_EAGER_OUTPUT_SETS (REUSE_ALL_SETS || 1)
 
@@ -624,7 +629,7 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 	}
 #endif	/* REUSE_NAIVE || EXPENSIVE_CHECKS */
 
-	/* TODO: better impl */
+	/* TODO: better impl? */
 
 #if LOG_REUSE
 	if (*offset == STATE_OFFSET_NONE) {
@@ -740,7 +745,6 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 
 	const size_t base = config->eager_output_buf.used;
 
-	/* TODO: intern. */
 	for (size_t i = 0; i < eager_outputs->count; i++) {
 		if (eager_outputs->ids[i] > config->max_eager_output_id) {
 			config->max_eager_output_id = eager_outputs->ids[i];
@@ -862,6 +866,8 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 		total += u64bitset_popcount(si->label_group_starts[i - 1]);
 		si->rank_sums[i] = total;
 	}
+
+	struct dst_buf *dst_buf = &config->dst_buf;
 
 	/* Second pass: search for an previous intance of the same run
 	 * of destination states in dst_buf, reusing that if possible. */
