@@ -294,12 +294,14 @@ generate_data(FILE *f, const struct cdata_config *config,
 		fprintf(f, "\t\t\t\t.labels = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
 		    si->labels[0], si->labels[1], si->labels[2], si->labels[3]);
 
+		size_t dst_count = 0;
 		if (comments) {
 			fprintf(f, "\t\t\t\t// ");
 			for (size_t i = 0; i < 256; i++) {
 				if (si->label_group_starts[i/64] & ((uint64_t)1 << (i & 63))) {
 					char c = (char)i;
 					fprintf(f, "%c", isprint(c) ? c : '.');
+					dst_count++;
 				}
 			}
 			fprintf(f, "\n");
@@ -320,6 +322,13 @@ generate_data(FILE *f, const struct cdata_config *config,
 		if (si->default_dst == STATE_OFFSET_NONE) {
 			fprintf(f, "\t\t\t\t.default_dst = %zu /* NONE */,\n", state_NONE);
 		} else {
+			if (comments) {
+				fprintf(f, "\t\t\t\t//");
+				for (size_t i = 0; i < dst_count; i++) {
+					fprintf(f, " %u,", config->dst_buf.buf[si->default_dst + i]);
+				}
+				fprintf(f, "\n");
+			}
 			fprintf(f, "\t\t\t\t.default_dst = %zu,\n", si->default_dst);
 		}
 
