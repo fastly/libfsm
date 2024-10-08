@@ -34,8 +34,13 @@
  * the same sets of dst_states, endids, or eager_outputs. This
  * should always be an improvement, making the generated code
  * smaller and improve locality. */
-#define REUSE_ALL_SETS 1
-#define REUSE_DST_TABLE_SETS (REUSE_ALL_SETS || 1)
+#define REUSE_ALL_SETS 0
+
+/* Disabled for now. Linear scan for this is too slow, whereas
+ * it's fine for the other two, and reuse makes a much bigger
+ * difference for those. */
+#define REUSE_DST_TABLE_SETS (REUSE_ALL_SETS || 0)
+
 #define REUSE_ENDID_SETS (REUSE_ALL_SETS || 1)
 #define REUSE_EAGER_OUTPUT_SETS (REUSE_ALL_SETS || 1)
 
@@ -609,12 +614,23 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 
 	if (REUSE_NAIVE) {
 		*offset = naive_offset;
-		return true;
+	}
+#endif	/* REUSE_NAIVE || EXPENSIVE_CHECKS */
+
+	/* TODO: better impl? */
+
+#if LOG_REUSE
+	if (*offset == STATE_OFFSET_NONE) {
+		config->reuse_stats_endid.miss++;
+	} else {
+		config->reuse_stats_endid.hit++;
 	}
 #endif
 
-	/* TODO: better impl */
-#endif
+	if (*offset != STATE_OFFSET_NONE) {
+		return true;
+	}
+#endif	/* REUSE_ENDID_SETS */
 
 	/* If the first endid for this state is later than the last
 	 * endid in the buffer, append an extra terminator 0 for the
@@ -689,12 +705,23 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 
 	if (REUSE_NAIVE) {
 		*offset = naive_offset;
-		return true;
+	}
+#endif	/* REUSE_NAIVE || EXPENSIVE_CHECKS */
+
+	/* TODO: better impl */
+
+#if LOG_REUSE
+	if (*offset == STATE_OFFSET_NONE) {
+		config->reuse_stats_eager_output.miss++;
+	} else {
+		config->reuse_stats_eager_output.hit++;
 	}
 #endif
 
-	/* TODO: better impl */
-#endif
+	if (*offset != STATE_OFFSET_NONE) {
+		return true;
+	}
+#endif	/* REUSE_EAGER_OUTPUT_SETS */
 
 	/* If necessary add a 0, as in save_state_endids above. */
 	if (config->eager_output_buf.used > 0
@@ -706,7 +733,6 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 
 	const size_t base = config->eager_output_buf.used;
 
-	/* TODO: intern. */
 	for (size_t i = 0; i < eager_outputs->count; i++) {
 		if (eager_outputs->ids[i] > config->max_eager_output_id) {
 			config->max_eager_output_id = eager_outputs->ids[i];
@@ -753,7 +779,7 @@ append_dst(struct dst_buf *buf, uint32_t dst)
 }
 
 static bool
-save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *si,
+save_state_edge_group_destinations(struct cdata_config *config, struct state_info *si,
 	size_t group_count, const struct ir_group *groups)
 {
 	/* Convert the group ranges to bitsets and an edge->destination state list. */
@@ -811,9 +837,6 @@ save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *s
 		const struct range_info *r = &outgoing[o_i];
 		assert(!u64bitset_get(si->label_group_starts, r->start));
 		u64bitset_set(si->label_group_starts, r->start);
-		if (!append_dst(dst_buf, r->dst_state)) {
-			return false;
-		}
 
 		for (uint8_t c = r->start; c <= r->end; c++) {
 			assert(!u64bitset_get(si->labels, r->start));
@@ -829,6 +852,8 @@ save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *s
 		total += u64bitset_popcount(si->label_group_starts[i - 1]);
 		si->rank_sums[i] = total;
 	}
+
+	struct dst_buf *dst_buf = &config->dst_buf;
 
 	/* Second pass: search for an previous intance of the same run
 	 * of destination states in dst_buf, reusing that if possible. */
@@ -854,9 +879,8 @@ save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *s
 
 	if (REUSE_NAIVE) {
 		si->dst = naive_offset;
-		return true;
 	}
-#endif
+#endif	/* REUSE_NAIVE || EXPENSIVE_CHECKS */
 
 	/* TODO: Better implementation. This should use the same
 	 * backward chaining search index approach that heatshrink uses,
@@ -864,7 +888,19 @@ save_state_edge_group_destinations(struct dst_buf *dst_buf, struct state_info *s
 	 * one edge leading to them: it doesn't need to be sparse.
 	 * Making the dst_state table smaller will improve locality and
 	 * make it faster. */
+
+#if LOG_REUSE
+	if (si->dst == STATE_OFFSET_NONE) {
+		config->reuse_stats_dst.miss++;
+	} else {
+		config->reuse_stats_dst.hit++;
+	}
 #endif
+
+	if (si->dst != STATE_OFFSET_NONE) {
+		return true;
+	}
+#endif	/* REUSE_DST_TABLE_SETS */
 
 	/* Otherwise, append the destination states to dst_buf. */
 	const size_t base = dst_buf->used;
@@ -919,19 +955,19 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 			config->state_info[s_i].default_dst = s->u.same.to;
 			break;
 		case IR_COMPLETE:
-			if (!save_state_edge_group_destinations(&config->dst_buf,
+			if (!save_state_edge_group_destinations(config,
 				si, s->u.complete.n, s->u.complete.groups)) {
 				goto alloc_fail;
 			}
 			break;
 		case IR_PARTIAL:
-			if (!save_state_edge_group_destinations(&config->dst_buf,
+			if (!save_state_edge_group_destinations(config,
 				si, s->u.partial.n, s->u.partial.groups)) {
 				goto alloc_fail;
 			}
 			break;
 		case IR_DOMINANT:
-			if (!save_state_edge_group_destinations(&config->dst_buf,
+			if (!save_state_edge_group_destinations(config,
 				si, s->u.dominant.n, s->u.dominant.groups)) {
 				goto alloc_fail;
 			}
