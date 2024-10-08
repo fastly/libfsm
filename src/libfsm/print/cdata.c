@@ -325,7 +325,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 			if (comments) {
 				fprintf(f, "\t\t\t\t//");
 				for (size_t i = 0; i < dst_count; i++) {
-					fprintf(f, " %u,", config->dst_buf.buf[si->default_dst + i]);
+					fprintf(f, " %u,", config->dst_buf.buf[si->dst + i]);
 				}
 				fprintf(f, "\n");
 			}
