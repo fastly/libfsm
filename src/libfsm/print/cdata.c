@@ -914,7 +914,7 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 		u64bitset_set(si->label_group_starts, r->start);
 
 		for (uint8_t c = r->start; c <= r->end; c++) {
-			assert(!u64bitset_get(si->labels, r->start));
+			assert(!u64bitset_get(si->labels, c));
 			u64bitset_set(si->labels, c);
 		}
 	}
