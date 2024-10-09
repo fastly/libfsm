@@ -41,8 +41,10 @@
  * difference for those. */
 #define REUSE_DST_TABLE_SETS (REUSE_ALL_SETS || 0)
 
-#define REUSE_ENDID_SETS (REUSE_ALL_SETS || 1)
-#define REUSE_EAGER_OUTPUT_SETS (REUSE_ALL_SETS || 1)
+/* Disabled for now, this can lead to false positives due to
+ * unterminated runs. Needs more testing. */
+#define REUSE_ENDID_SETS (REUSE_ALL_SETS || 0)
+#define REUSE_EAGER_OUTPUT_SETS (REUSE_ALL_SETS || 0)
 
 /* Log stats for set reuse. */
 #define LOG_REUSE 1
