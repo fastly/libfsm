@@ -11,7 +11,6 @@
 #include <stdlib.h>
 
 #include <fsm/fsm.h>
-#include <fsm/options.h>
 
 #include <adt/common.h>
 
@@ -45,11 +44,14 @@ struct state_array;
 #define FSM_CAPTURE_MAX INT_MAX
 
 struct fsm_edge {
-	fsm_state_t state; /* destination */
+	fsm_state_t state:24; /* destination. :24 for packing */
 	unsigned char symbol;
 };
 
 struct fsm_state {
+	struct edge_set *edges;
+	struct state_set *epsilons;
+
 	unsigned int end:1;
 
 	/* If 0, then this state has no need for checking
@@ -58,24 +60,21 @@ struct fsm_state {
 
 	/* meaningful within one particular transformation only */
 	unsigned int visited:1;
-
-	struct edge_set *edges;
-	struct state_set *epsilons;
 };
 
 struct fsm {
 	struct fsm_state *states; /* array */
+	const struct fsm_alloc *alloc;
 
 	size_t statealloc; /* number of elements allocated */
 	size_t statecount; /* number of elements populated */
-	size_t endcount;
+	size_t endcount:31; /* :31 for packing */
 
-	fsm_state_t start;
 	unsigned int hasstart:1;
+	fsm_state_t start;
 
 	struct fsm_capture_info *capture_info;
 	struct endid_info *endid_info;
-	const struct fsm_options *opt;
 };
 
 struct fsm *
@@ -93,7 +92,7 @@ struct state_set **
 epsilon_closure(struct fsm *fsm);
 
 void
-closure_free(struct state_set **closures, size_t n);
+closure_free(struct fsm *fsm, struct state_set **closures, size_t n);
 
 /*
  * Internal free function that invokes free(3) by default, or a user-provided

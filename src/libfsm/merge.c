@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stdio.h>
 #include <errno.h>
 
 #include <fsm/fsm.h>
@@ -25,9 +26,11 @@
 #define LOG_MERGE_ENDIDS 0
 
 struct copy_capture_env {
+#ifndef NDEBUG
 	char tag;
+#endif
+	bool ok;
 	struct fsm *dst;
-	int ok;
 };
 
 static int
@@ -53,7 +56,7 @@ merge(struct fsm *dst, struct fsm *src,
 
 		/* TODO: round up to next power of two here?
 		 * or let realloc do that internally */
-		tmp = f_realloc(dst->opt->alloc, dst->states, newalloc * sizeof *dst->states);
+		tmp = f_realloc(dst->alloc, dst->states, newalloc * sizeof *dst->states);
 		if (tmp == NULL) {
 			return NULL;
 		}
@@ -110,7 +113,7 @@ merge(struct fsm *dst, struct fsm *src,
 		return NULL;
 	}
 
-	f_free(src->opt->alloc, src->states);
+	f_free(src->alloc, src->states);
 	src->states = NULL;
 	src->statealloc = 0;
 	src->statecount = 0;
@@ -133,7 +136,7 @@ copy_capture_cb(fsm_state_t state,
 
 	if (!fsm_capture_add_action(env->dst, state, type,
 		capture_id, to)) {
-		env->ok = 0;
+		env->ok = false;
 		return 0;
 	}
 
@@ -144,9 +147,11 @@ static int
 copy_capture_actions(struct fsm *dst, struct fsm *src)
 {
 	struct copy_capture_env env;
+#ifndef NDEBUG
 	env.tag = 'C';
+#endif
 	env.dst = dst;
-	env.ok = 1;
+	env.ok = true;
 
 	fsm_capture_action_iter(src, copy_capture_cb, &env);
 
@@ -163,7 +168,6 @@ struct copy_end_ids_env {
 static int
 copy_end_ids_cb(fsm_state_t state, const fsm_end_id_t *ids, size_t num_ids, void *opaque)
 {
-	enum fsm_endid_set_res sres;
 	struct copy_end_ids_env *env = opaque;
 	assert(env->tag == 'M');
 
@@ -172,19 +176,17 @@ copy_end_ids_cb(fsm_state_t state, const fsm_end_id_t *ids, size_t num_ids, void
 	    state + env->base_src, id);
 #endif
 
-	sres = fsm_endid_set_bulk(env->dst, state + env->base_src, num_ids, ids, FSM_ENDID_BULK_REPLACE);
-	if (sres == FSM_ENDID_SET_ERROR_ALLOC_FAIL) {
-		return 0;
-	}
-
-	return 1;
+	return fsm_endid_set_bulk(env->dst, state + env->base_src,
+		num_ids, ids, FSM_ENDID_BULK_REPLACE);
 }
 
 static int
 copy_end_ids(struct fsm *dst, struct fsm *src, fsm_state_t base_src)
 {
 	struct copy_end_ids_env env;
+#ifndef NDEBUG
 	env.tag = 'M';		/* for Merge */
+#endif
 	env.dst = dst;
 	env.src = src;
 	env.base_src = base_src;
@@ -204,7 +206,7 @@ fsm_mergeab(struct fsm *a, struct fsm *b,
 	assert(b != NULL);
 	assert(base_b != NULL);
 
-	if (a->opt != b->opt) {
+	if (a->alloc != b->alloc) {
 		errno = EINVAL;
 		return NULL;
 	}
@@ -231,11 +233,6 @@ fsm_merge(struct fsm *a, struct fsm *b,
 	assert(a != NULL);
 	assert(b != NULL);
 	assert(combine_info != NULL);
-
-	if (a->opt != b->opt) {
-		errno = EINVAL;
-		return NULL;
-	}
 
 	/*
 	 * We merge the smaller FSM into the larger FSM.

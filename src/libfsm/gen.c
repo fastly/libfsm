@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
+#include <errno.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
@@ -74,21 +75,23 @@ struct gen_ctx {
 	const struct fsm *fsm;
 	size_t max_length;
 	fsm_generate_matches_cb *cb;
-	void *opaque;
+
+	bool done;
 
 	size_t buf_ceil;
 	size_t buf_used;
 	char *buf;
+
+	void *opaque;
+
+	unsigned depth;
+	unsigned steps;
 
 	/* This is used to avoid useless cycles -- if a state
 	 * was reached since the same match_count, then don't
 	 * explore it again. */
 	unsigned match_count;
 	unsigned *state_counts;
-
-	unsigned depth;
-	unsigned steps;
-	bool done;
 
 	/* Shortest end distance for a state: sed[s_id] */
 	unsigned *sed;
@@ -139,6 +142,11 @@ int
 fsm_generate_matches(struct fsm *fsm, size_t max_length,
     fsm_generate_matches_cb *cb, void *opaque)
 {
+	if (max_length == 0) {
+		errno = EINVAL;
+		return 0;
+	}
+
 	INIT_TIMERS();
 	TIME(&pre);
 	int res = gen_init_outer(fsm, max_length, cb, opaque, false, 0);
@@ -193,7 +201,7 @@ gen_init_outer(struct fsm *fsm, size_t max_length,
     fsm_generate_matches_cb *cb, void *opaque,
     bool randomized, unsigned seed)
 {
-	int res = 0;
+	int res = false;
 	if (fsm == NULL || cb == NULL || max_length == 0) {
 		return false;
 	}
@@ -211,7 +219,7 @@ gen_init_outer(struct fsm *fsm, size_t max_length,
 	}
 
 	struct gen_ctx ctx = {
-		.alloc = fsm->opt->alloc,
+		.alloc = fsm->alloc,
 		.fsm = fsm,
 		.max_length = max_length,
 		.cb = cb,
@@ -222,11 +230,11 @@ gen_init_outer(struct fsm *fsm, size_t max_length,
 		goto cleanup;
 	}
 
-	res = 1;
+	res = true;
 
 	while (!ctx.done) {
 		if (!gen_iter(&ctx)) {
-			res = 0;
+			res = false;
 			break;
 		}
 	}
@@ -562,8 +570,8 @@ sfs_step_edges(struct gen_ctx *ctx, struct gen_stack_frame *sf)
 		sf->u.step_edges.initialized = true;
 	}
 
-	if (ctx->buf_used + ctx->sed[sf->s_id] >= ctx->max_length) {
-		LOG(2, "PRUNING due to max length: used:%zu + sed[%d]:%u >= max_length:%zu\n",
+	if (ctx->buf_used + ctx->sed[sf->s_id] > ctx->max_length) {
+		LOG(2, "PRUNING due to max length: used:%zu + sed[%d]:%u > max_length:%zu\n",
 		    ctx->buf_used, sf->s_id, ctx->sed[sf->s_id], ctx->max_length);
 		sf->t = GEN_SFS_LEAVING_STATE;
 		return true;

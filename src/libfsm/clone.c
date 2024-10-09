@@ -6,6 +6,8 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
 
 #include <fsm/fsm.h>
 #include <fsm/pred.h>
@@ -33,9 +35,8 @@ fsm_clone(const struct fsm *fsm)
 	size_t i;
 
 	assert(fsm != NULL);
-	assert(fsm->opt != NULL);
 
-	new = fsm_new(fsm->opt);
+	new = fsm_new_statealloc(fsm->alloc, fsm->statecount);
 	if (new == NULL) {
 		return NULL;
 	}
@@ -50,12 +51,12 @@ fsm_clone(const struct fsm *fsm)
 			fsm_setend(new, i, 1);
 		}
 
-		if (!state_set_copy(&new->states[i].epsilons, new->opt->alloc, fsm->states[i].epsilons)) {
+		if (!state_set_copy(&new->states[i].epsilons, new->alloc, fsm->states[i].epsilons)) {
 			fsm_free(new);
 			return NULL;
 		}
 
-		if (!edge_set_copy(&new->states[i].edges, new->opt->alloc, fsm->states[i].edges)) {
+		if (!edge_set_copy(&new->states[i].edges, new->alloc, fsm->states[i].edges)) {
 			fsm_free(new);
 			return NULL;
 		}
@@ -86,7 +87,7 @@ fsm_clone(const struct fsm *fsm)
 
 struct copy_capture_actions_env {
 	struct fsm *dst;
-	int ok;
+	bool ok;
 };
 
 static int
@@ -99,7 +100,7 @@ copy_capture_actions_cb(fsm_state_t state,
 
 	if (!fsm_capture_add_action(env->dst,
 		state, type, capture_id, to)) {
-		env->ok = 0;
+		env->ok = false;
 	}
 
 	return env->ok;
@@ -108,7 +109,7 @@ copy_capture_actions_cb(fsm_state_t state,
 static int
 copy_capture_actions(struct fsm *dst, const struct fsm *src)
 {
-	struct copy_capture_actions_env env = { NULL, 1 };
+	struct copy_capture_actions_env env = { NULL, true };
 	env.dst = dst;
 
 	fsm_capture_action_iter(src,
@@ -117,26 +118,26 @@ copy_capture_actions(struct fsm *dst, const struct fsm *src)
 }
 
 struct copy_end_ids_env {
+#ifndef NDEBUG
 	char tag;
+#endif
 	struct fsm *dst;
 	const struct fsm *src;
-	int ok;
+	bool ok;
 };
 
 static int
 copy_end_ids_cb(fsm_state_t state, const fsm_end_id_t id, void *opaque)
 {
 	struct copy_end_ids_env *env = opaque;
-	enum fsm_endid_set_res sres;
 	assert(env->tag == 'c');
 
 #if LOG_CLONE_ENDIDS
 	fprintf(stderr, "clone[%d] <- %d\n", state, id);
 #endif
 
-	sres = fsm_endid_set(env->dst, state, id);
-	if (sres == FSM_ENDID_SET_ERROR_ALLOC_FAIL) {
-		env->ok = 0;
+	if (!fsm_endid_set(env->dst, state, id)) {
+		env->ok = false;
 		return 0;
 	}
 
@@ -147,10 +148,12 @@ static int
 copy_end_ids(struct fsm *dst, const struct fsm *src)
 {
 	struct copy_end_ids_env env;
+#ifndef NDEBUG
 	env.tag = 'c';		/* for clone */
+#endif
 	env.dst = dst;
 	env.src = src;
-	env.ok = 1;
+	env.ok = true;
 
 	fsm_endid_iter(src, copy_end_ids_cb, &env);
 

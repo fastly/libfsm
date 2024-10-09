@@ -18,6 +18,8 @@
  * we're done with graph algorithmics.
  */
 
+struct fsm_options;
+
 enum ir_strategy {
 	IR_NONE     = 1 << 0,
 	IR_SAME     = 1 << 1,
@@ -51,9 +53,13 @@ struct ir_error {
 
 struct ir_state {
 	const char *example;
-	unsigned int isend:1;
 
-	struct fsm_end_ids *end_ids; /* NULL -> 0 */
+	struct ir_state_endids {
+		fsm_end_id_t *ids; /* NULL -> 0 */
+		size_t count;
+	} endids;
+
+	unsigned int isend:1;
 
 	enum ir_strategy strategy;
 	union {
@@ -100,9 +106,13 @@ struct ir {
 	struct ir_state *states; /* array */
 };
 
+/* caller frees */
+int
+make_example(const struct fsm *fsm, fsm_state_t s, char **example);
+
 /* TODO: can pass in mask of allowed strategies */
 struct ir *
-make_ir(const struct fsm *fsm);
+make_ir(const struct fsm *fsm, const struct fsm_options *opt);
 
 void
 free_ir(const struct fsm *fsm, struct ir *ir);

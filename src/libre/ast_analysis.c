@@ -13,7 +13,6 @@
 #include <re/re.h>
 
 #include "class.h"
-#include "print.h"
 #include "ast.h"
 #include "ast_analysis.h"
 
@@ -783,7 +782,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 				    "%s: LITERAL: rejecting non-optional newline match after $ as unsupported\n",
 				    __func__);
 				set_flags(n, AST_FLAG_UNSATISFIABLE);
-				return AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE;
+				return AST_ANALYSIS_ERROR_UNSUPPORTED;
 			}
 		}
 		break;
@@ -1010,8 +1009,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 					all_set_past_always_consuming &= child_env.past_always_consuming;
 					any_sat = 1;
 				}
-			} else if (res == AST_ANALYSIS_ERROR_UNSUPPORTED_CAPTURE
-			    || res == AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE) {
+			} else if (res == AST_ANALYSIS_ERROR_UNSUPPORTED) {
 				continue;
 			} else {
 				return res;
@@ -1201,7 +1199,7 @@ analysis_iter_anchoring(struct anchoring_env *env, struct ast_expr *n)
 			    "%s: SUBTRACT: rejecting non-optional newline match after $ as unsupported\n",
 			    __func__);
 			set_flags(n, AST_FLAG_UNSATISFIABLE);
-			return AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE;
+			return AST_ANALYSIS_ERROR_UNSUPPORTED;
 		}
 
 		if (res != AST_ANALYSIS_OK) {
@@ -1287,9 +1285,9 @@ analysis_iter_reverse_anchoring(struct anchoring_env *env, struct ast_expr *n)
 			if (env->followed_by_consuming) {
 				if (env->followed_by_consuming_newline) {
 					LOG(3 - LOG_ANCHORING,
-					    "%s: END anchor & followed_by_consuming, returning UNSUPPORTED_PCRE\n",
+					    "%s: END anchor & followed_by_consuming, returning UNSUPPORTED\n",
 					    __func__);
-					return AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE;
+					return AST_ANALYSIS_ERROR_UNSUPPORTED;
 				} else {
 					LOG(3 - LOG_ANCHORING,
 					    "%s: END anchor & followed_by_consuming, setting UNSATISFIABLE\n",
@@ -1446,9 +1444,8 @@ analysis_iter_reverse_anchoring(struct anchoring_env *env, struct ast_expr *n)
 					any_set_followed_by_consuming_newline |= child_env.followed_by_consuming_newline;
 					any_sat = 1;
 				}
-			} else if (res == AST_ANALYSIS_ERROR_UNSUPPORTED_CAPTURE
-			    || res == AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE) {
-				LOG(3 - LOG_ANCHORING, "%s: got res of UNSUPPORTED_*, bubbling up\n", __func__);
+			} else if (res == AST_ANALYSIS_ERROR_UNSUPPORTED) {
+				LOG(3 - LOG_ANCHORING, "%s: got res of UNSUPPORTED, bubbling up\n", __func__);
 				return res;
 			} else {
 				return res;
@@ -1883,7 +1880,7 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 					 *
 					 * An example input that triggers this is '^(($)|)+$' . */
 					set_flags(n, AST_FLAG_UNSATISFIABLE);
-					return AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE;
+					return AST_ANALYSIS_ERROR_UNSUPPORTED;
 				}
 			}
 
@@ -1994,7 +1991,7 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 			    && repeat_plus_ancestor->u.repeat.max == AST_COUNT_UNBOUNDED);
 			LOG(3 - LOG_REPETITION_CASES,
 			    "%s: not yet implemented, skipping\n", __func__);
-			/* return AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE; */
+			/* return AST_ANALYSIS_ERROR_UNSUPPORTED; */
 		}
 
 		res = analysis_iter_repetition(n->u.group.e, outermost_repeat_parent,
@@ -2017,10 +2014,10 @@ analysis_iter_repetition(struct ast_expr *n, struct ast_expr *outermost_repeat_p
 }
 
 struct pincer_anchors_env {
-	int always_consumes_or_anchored_start;
-	int always_consumes_or_anchored_end;
+	unsigned int always_consumes_or_anchored_start:1;
+	unsigned int always_consumes_or_anchored_end:1;
 
-	int alloc_fail;
+	unsigned int alloc_fail:1;
 	size_t used;
 	size_t ceil;
 	struct ast_expr **nodes;

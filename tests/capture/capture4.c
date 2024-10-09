@@ -90,11 +90,11 @@ build_and_combine(unsigned *cb_a, unsigned *cb_b)
 
 #if LOG_INTERMEDIATE_FSMS
 	fprintf(stderr, "==================== abc \n");
-	fsm_print_fsm(stderr, f_abc);
+	fsm_dump(stderr, f_abc);
 	fsm_capture_dump(stderr, "abc", f_abc);
 
 	fprintf(stderr, "==================== ab*c \n");
-	fsm_print_fsm(stderr, f_ab_c);
+	fsm_dump(stderr, f_ab_c);
 	fsm_capture_dump(stderr, "ab*c", f_ab_c);
 #endif
 
@@ -110,7 +110,7 @@ build_and_combine(unsigned *cb_a, unsigned *cb_b)
 
 #if LOG_INTERMEDIATE_FSMS
 	fprintf(stderr, "==================== post-union \n");
-	fsm_print_fsm(stderr, f_all);
+	fsm_dump(stderr, f_all);
 	fsm_capture_dump(stderr, "capture_actions", f_all);
 	fprintf(stderr, "====================\n");
 #endif
@@ -121,7 +121,7 @@ build_and_combine(unsigned *cb_a, unsigned *cb_b)
 
 #if LOG_INTERMEDIATE_FSMS
 	fprintf(stderr, "==================== post-det \n");
-	fsm_print_fsm(stderr, f_all);
+	fsm_dump(stderr, f_all);
 	fsm_capture_dump(stderr, "capture_actions", f_all);
 	fprintf(stderr, "====================\n");
 #endif
@@ -144,7 +144,7 @@ det_and_min(const char *tag, struct fsm *fsm)
 
 #if LOG_INTERMEDIATE_FSMS
 	fprintf(stderr, "==== after det_and_min: '%s'\n", tag);
-	fsm_print_fsm(stderr, fsm);
+	fsm_dump(stderr, fsm);
 	fsm_capture_dump(stderr, tag, fsm);
 #endif
 
@@ -153,7 +153,7 @@ det_and_min(const char *tag, struct fsm *fsm)
 static struct fsm *
 build_ab_c(void)
 {
-	struct fsm *fsm = captest_fsm_with_options();
+	struct fsm *fsm = fsm_new(NULL);
 	assert(fsm != NULL);
 
 	if (!fsm_addstate_bulk(fsm, 4)) { goto fail; }
@@ -220,21 +220,21 @@ check(const struct fsm *fsm, const char *string,
 	assert(captures[cb_b].pos[1] == pb_1);
 
 	{
-		enum fsm_getendids_res gres;
-		fsm_end_id_t id_buf[2];
-		size_t written;
-		gres = fsm_getendids(fsm, end, 2, id_buf, &written);
-		if (gres != FSM_GETENDIDS_FOUND) {
+		int gres;
+		fsm_end_id_t ids[2];
+
+		gres = fsm_endid_get(fsm, end, fsm_endid_count(fsm, end), ids);
+		if (gres != 1) {
 			assert(!"fsm_getendids failed");
 		}
 
 		if (expected_ends == 0x2) {
-			assert(written == 1);
-			assert(id_buf[0] == 1);
+			assert(fsm_endid_count(fsm, end) == 1);
+			assert(ids[0] == 1);
 		} else if (expected_ends == 0x3) {
-			assert(written == 2);
-			assert(id_buf[0] == 0);
-			assert(id_buf[1] == 1);
+			assert(fsm_endid_count(fsm, end) == 2);
+			assert(ids[0] == 0);
+			assert(ids[1] == 1);
 		} else {
 			assert(!"test not handled");
 		}

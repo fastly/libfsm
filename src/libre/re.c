@@ -17,7 +17,6 @@
 
 #include "ac.h"
 #include "class.h"
-#include "print.h"
 #include "ast.h"
 #include "ast_analysis.h"
 #include "ast_compile.h"
@@ -92,12 +91,12 @@ re_flags(const char *s, enum re_flags *f)
 
 struct ast *
 re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
-	const struct fsm_options *opt,
 	enum re_flags flags, struct re_err *err, int *unsatisfiable)
 {
 	const struct dialect *m;
 	struct ast *ast = NULL;
 	enum ast_analysis_res res;
+	struct re_pos end;
 	
 	assert(getc != NULL);
 
@@ -109,7 +108,7 @@ re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 
 	flags |= m->flags;
 
-	ast = m->parse(getc, opaque, opt, flags, m->overlap, err);
+	ast = m->parse(getc, opaque, flags, m->overlap, err, &end);
 
 	if (ast == NULL) {
 		return NULL;
@@ -122,25 +121,8 @@ re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 
 	/* Do a complete pass over the AST, filling in other details. */
 	res = ast_analysis(ast, flags);
-
 	if (res < 0) {
-		ast_free(ast);
-		if (err != NULL) {
-			if (res == AST_ANALYSIS_ERROR_UNSUPPORTED_PCRE) {
-				err->e = RE_EUNSUPPPCRE;
-			} else if (res == AST_ANALYSIS_ERROR_MEMORY) {
-				/* This case comes up during fuzzing. */
-				if (err->e == RE_ESUCCESS) {
-					err->e = RE_EERRNO;
-					errno = ENOMEM;
-				}
-			} else if (res == AST_ANALYSIS_ERROR_UNSUPPORTED_CAPTURE) {
-				err->e = RE_EUNSUPCAPTUR;
-			} else if (err->e == RE_ESUCCESS) {
-				err->e = RE_EERRNO;
-			}
-		}
-		return NULL;
+		goto error;
 	}
 
 	if (unsatisfiable != NULL) {
@@ -148,11 +130,52 @@ re_parse(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 	}
 
 	return ast;
+
+error:
+
+	ast_free(ast);
+
+	if (err == NULL) {
+		return NULL;
+	}
+
+	switch (res) {
+	case AST_ANALYSIS_ERROR_MEMORY:
+		/* This case comes up during fuzzing. */
+		if (err->e == RE_ESUCCESS) {
+			err->e = RE_EERRNO;
+			errno = ENOMEM;
+		}
+		break;
+
+	case AST_ANALYSIS_ERROR_UNSUPPORTED:
+		err->e = RE_EUNSUPPORTED;
+
+		/*
+		 * We can't tag AST nodes with re_pos, because it's
+		 * also possible to construct an AST from an .fsm file.
+		 * We detect RE_EUNSUPPORTED from annotations (e.g. nullable)
+		 * on arbitary nodes. So at best we could tag an expr.
+		 * But since in general we'd need to fabricate a pos anyway,
+		 * I'm blaming the entire expression here.
+		 */
+		err->start.byte = 0;
+		err->end.byte = end.byte;
+		break;
+
+	default:
+		if (err->e == RE_ESUCCESS) {
+			err->e = RE_EERRNO;
+		}
+		break;
+	}
+
+	return NULL;
 }
 
 struct fsm *
 re_comp(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
-	const struct fsm_options *opt,
+	const struct fsm_alloc *alloc,
 	enum re_flags flags, struct re_err *err)
 {
 	struct ast *ast;
@@ -170,7 +193,7 @@ re_comp(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 
 	flags |= m->flags;
 
-	ast = re_parse(dialect, getc, opaque, opt, flags, err, &unsatisfiable);
+	ast = re_parse(dialect, getc, opaque, flags, err, &unsatisfiable);
 	if (ast == NULL) {
 		return NULL;
 	}
@@ -188,7 +211,7 @@ re_comp(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 		ast->expr = ast_expr_tombstone;
 	}
 
-	new = ast_compile(ast, flags, opt, err);
+	new = ast_compile(ast, flags, alloc, err);
 
 	ast_free(ast);
 
@@ -218,7 +241,6 @@ error:
  */
 int
 re_is_literal(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
-	const struct fsm_options *opt,
 	enum re_flags flags, struct re_err *err,
 	enum re_literal_category *category, char **s, size_t *n)
 {
@@ -239,7 +261,7 @@ re_is_literal(enum re_dialect dialect, int (*getc)(void *opaque), void *opaque,
 
 	flags |= m->flags;
 
-	ast = re_parse(dialect, getc, opaque, opt, flags, err, &unsatisfiable);
+	ast = re_parse(dialect, getc, opaque, flags, err, &unsatisfiable);
 	if (ast == NULL) {
 		return -1;
 	}

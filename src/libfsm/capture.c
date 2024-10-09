@@ -14,11 +14,16 @@ fsm_capture_init(struct fsm *fsm)
 	struct fsm_capture_info *ci = NULL;
 	size_t i;
 
-	ci = f_calloc(fsm->opt->alloc,
-	    1, sizeof(*ci));
+	ci = f_malloc(fsm->alloc, sizeof(*ci));
 	if (ci == NULL) {
 		goto cleanup;
 	}
+
+	ci->max_capture_id = 0;
+	ci->bucket_count   = 0;
+	ci->buckets_used   = 0;
+	ci->buckets        = NULL;
+
 	fsm->capture_info = ci;
 
 	for (i = 0; i < fsm->statealloc; i++) {
@@ -29,7 +34,7 @@ fsm_capture_init(struct fsm *fsm)
 
 cleanup:
 	if (ci != NULL) {
-		f_free(fsm->opt->alloc, ci);
+		f_free(fsm->alloc, ci);
 	}
 	return 0;
 }
@@ -41,8 +46,8 @@ fsm_capture_free(struct fsm *fsm)
 	if (ci == NULL) {
 		return;
 	}
-	f_free(fsm->opt->alloc, ci->buckets);
-	f_free(fsm->opt->alloc, ci);
+	f_free(fsm->alloc, ci->buckets);
+	f_free(fsm->alloc, ci);
 	fsm->capture_info = NULL;
 }
 
@@ -133,7 +138,7 @@ fsm_capture_set_path(struct fsm *fsm, unsigned capture_id,
 	env.trail = NULL;
 	env.seen = NULL;
 
-	env.trail = f_malloc(fsm->opt->alloc,
+	env.trail = f_malloc(fsm->alloc,
 	    DEF_TRAIL_CEIL * sizeof(env.trail[0]));
 	if (env.trail == NULL) {
 		goto cleanup;
@@ -141,7 +146,7 @@ fsm_capture_set_path(struct fsm *fsm, unsigned capture_id,
 	env.trail_ceil = DEF_TRAIL_CEIL;
 
 	seen_words = fsm->statecount/64 + 1;
-	env.seen = f_malloc(fsm->opt->alloc,
+	env.seen = f_malloc(fsm->alloc,
 	    seen_words * sizeof(env.seen[0]));
 
 	if (!mark_capture_path(&env)) {
@@ -156,8 +161,8 @@ fsm_capture_set_path(struct fsm *fsm, unsigned capture_id,
 	/* fall through */
 
 cleanup:
-	f_free(fsm->opt->alloc, env.trail);
-	f_free(fsm->opt->alloc, env.seen);
+	f_free(fsm->alloc, env.trail);
+	f_free(fsm->alloc, env.seen);
 	return res;
 }
 
@@ -177,7 +182,7 @@ init_capture_action_htab(struct fsm *fsm, struct fsm_capture_info *ci)
 	assert(ci->buckets_used == 0);
 
 	count = DEF_CAPTURE_ACTION_BUCKET_COUNT;
-	ci->buckets = f_malloc(fsm->opt->alloc,
+	ci->buckets = f_malloc(fsm->alloc,
 	    count * sizeof(ci->buckets[0]));
 	if (ci->buckets == NULL) {
 		return 0;
@@ -310,7 +315,7 @@ add_capture_action(struct fsm *fsm, struct fsm_capture_info *ci,
 			return 0;
 		}
 	} else if (ci->buckets_used >= ci->bucket_count/2) { /* grow */
-		if (!grow_capture_action_buckets(fsm->opt->alloc, ci)) {
+		if (!grow_capture_action_buckets(fsm->alloc, ci)) {
 			return 0;
 		}
 	}
@@ -404,7 +409,7 @@ grow_trail(struct capture_set_path_env *env)
 	nceil = 2 * env->trail_ceil;
 	assert(nceil > env->trail_ceil);
 
-	ntrail = f_realloc(env->fsm->opt->alloc, env->trail,
+	ntrail = f_realloc(env->fsm->alloc, env->trail,
 	    nceil * sizeof(env->trail[0]));
 	if (ntrail == NULL) {
 		return 0;

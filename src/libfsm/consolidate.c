@@ -9,6 +9,8 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
 
 #include <fsm/fsm.h>
 #include <fsm/capture.h>
@@ -34,11 +36,13 @@ struct mapping_closure {
 };
 
 struct consolidate_copy_capture_actions_env {
+#ifndef NDEBUG
 	char tag;
+#endif
 	struct fsm *dst;
 	size_t mapping_count;
 	const fsm_state_t *mapping;
-	int ok;
+	bool ok;
 };
 
 static int
@@ -68,9 +72,8 @@ fsm_consolidate(const struct fsm *src,
 	size_t max_used = 0;
 
 	assert(src != NULL);
-	assert(src->opt != NULL);
 
-	dst = fsm_new(src->opt);
+	dst = fsm_new(src->alloc);
 	if (dst == NULL) {
 		goto cleanup;
 	}
@@ -90,7 +93,7 @@ fsm_consolidate(const struct fsm *src,
 	}
 	assert(dst->statecount == max_used + 1);
 
-	seen = f_calloc(src->opt->alloc,
+	seen = f_calloc(src->alloc,
 	    mapping_count/64 + 1, sizeof(seen[0]));
 	if (seen == NULL) {
 		goto cleanup;
@@ -114,19 +117,19 @@ fsm_consolidate(const struct fsm *src,
 			SET_DST_SEEN(dst_i);
 
 			if (!state_set_copy(&dst->states[dst_i].epsilons,
-				dst->opt->alloc, src->states[src_i].epsilons)) {
+				dst->alloc, src->states[src_i].epsilons)) {
 				goto cleanup;
 			}
 			state_set_compact(&dst->states[dst_i].epsilons,
 			    mapping_cb, &closure);
 
 			if (!edge_set_copy(&dst->states[dst_i].edges,
-				dst->opt->alloc,
+				dst->alloc,
 				src->states[src_i].edges)) {
 				goto cleanup;
 			}
 			edge_set_compact(&dst->states[dst_i].edges,
-			    dst->opt->alloc, mapping_cb, &closure);
+			    dst->alloc, mapping_cb, &closure);
 
 			if (fsm_isend(src, src_i)) {
 				fsm_setend(dst, dst_i, 1);
@@ -151,13 +154,13 @@ fsm_consolidate(const struct fsm *src,
 		}
 	}
 
-	f_free(src->opt->alloc, seen);
+	f_free(src->alloc, seen);
 
 	return dst;
 
 cleanup:
 
-	if (seen != NULL) { f_free(src->opt->alloc, seen); }
+	if (seen != NULL) { f_free(src->alloc, seen); }
 	return NULL;
 }
 
@@ -186,7 +189,7 @@ consolidate_copy_capture_actions_cb(fsm_state_t state,
 
 	if (!fsm_capture_add_action(env->dst,
 		s, type, capture_id, t)) {
-		env->ok = 0;
+		env->ok = false;
 		return 0;
 	}
 
@@ -200,11 +203,13 @@ consolidate_copy_capture_actions(struct fsm *dst, const struct fsm *src,
 	size_t i;
 
 	struct consolidate_copy_capture_actions_env env;
+#ifndef NDEBUG
 	env.tag = 'C';
+#endif
 	env.dst = dst;
 	env.mapping_count = mapping_count;
 	env.mapping = mapping;
-	env.ok = 1;
+	env.ok = true;
 
 #if LOG_MAPPING
 	for (i = 0; i < mapping_count; i++) {
@@ -231,19 +236,14 @@ static int
 consolidate_end_ids_cb(fsm_state_t state, const fsm_end_id_t *ids, size_t num_ids, void *opaque)
 {
 	struct consolidate_end_ids_env *env = opaque;
-	enum fsm_endid_set_res sres;
 	fsm_state_t s;
 	assert(env->tag == 'C');
 
 	assert(state < env->mapping_count);
 	s = env->mapping[state];
 
-	sres = fsm_endid_set_bulk(env->dst, s, num_ids, ids, FSM_ENDID_BULK_APPEND);
-	if (sres == FSM_ENDID_SET_ERROR_ALLOC_FAIL) {
-		return 0;
-	}
-
-	return 1;
+	return fsm_endid_set_bulk(env->dst, s,
+		num_ids, ids, FSM_ENDID_BULK_APPEND);
 }
 
 static int
@@ -253,7 +253,9 @@ consolidate_end_ids(struct fsm *dst, const struct fsm *src,
 	struct consolidate_end_ids_env env;
 	int ret;
 
+#ifndef NDEBUG
 	env.tag = 'C';		/* for Consolidate */
+#endif
 	env.dst = dst;
 	env.src = src;
 	env.mapping = mapping;

@@ -8,7 +8,7 @@
 #define RE_H
 
 struct fsm;
-struct fsm_options;
+struct fsm_alloc;
 
 enum re_dialect {
 	RE_LIKE,
@@ -46,8 +46,6 @@ enum re_errno {
 	RE_EERRNO       =  1 | RE_MISC,
 	RE_EBADDIALECT  =  2 | RE_MISC,
 	RE_EBADGROUP    =  3 | RE_MISC,
-	RE_EUNSUPCAPTUR =  4 | RE_MISC,
-	RE_EUNSUPPPCRE  =  5 | RE_MISC,
 
 	RE_ENEGRANGE    =  0 | RE_MARK | RE_GROUP,
 	RE_ENEGCOUNT    =  1 | RE_MARK | RE_GROUP,
@@ -135,7 +133,7 @@ re_getchar_fun(void *opaque);
 struct fsm *
 re_comp(enum re_dialect dialect,
 	re_getchar_fun *f, void *opaque,
-	const struct fsm_options *opt,
+	const struct fsm_alloc *alloc,
 	enum re_flags flags, struct re_err *err);
 
 /*

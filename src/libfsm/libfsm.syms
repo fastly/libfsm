@@ -3,6 +3,7 @@ fsm_complement
 fsm_union
 fsm_union_array
 fsm_intersect
+fsm_intersect_charset
 
 # <fsm/cost.h>
 fsm_cost_legible
@@ -15,6 +16,7 @@ fsm_reachableall
 fsm_reachableany
 fsm_walk_edges
 fsm_walk_states
+fsm_detect_required_characters
 
 # <fsm/pred.h>
 fsm_epsilonsonly
@@ -34,23 +36,25 @@ fsm_generate_cb_printf_escaped
 fsm_parse
 
 # <fsm/print.h>
+fsm_dump
+fsm_print
+fsm_print_amd64_att
+fsm_print_amd64_go
+fsm_print_amd64_nasm
 fsm_print_api
 fsm_print_awk
 fsm_print_c
 fsm_print_dot
 fsm_print_fsm
+fsm_print_go
 fsm_print_ir
 fsm_print_irjson
 fsm_print_json
-fsm_print_vmc
-fsm_print_vmdot
-fsm_print_vmasm
-fsm_print_vmasm_amd64_att
-fsm_print_vmasm_amd64_nasm
-fsm_print_vmasm_amd64_go
+fsm_print_llvm
 fsm_print_rust
 fsm_print_sh
-fsm_print_go
+fsm_print_vmc
+fsm_print_vmdot
 fsm_print_vmops_c
 fsm_print_vmops_h
 fsm_print_vmops_main
@@ -59,14 +63,14 @@ fsm_print_vmops_main
 fsm_clone
 fsm_free
 fsm_new
-fsm_setoptions
-fsm_getoptions
+fsm_new_statealloc
 fsm_move
 fsm_merge
 fsm_addstate
 fsm_addstate_bulk
 fsm_removestate
 fsm_shuffle
+fsm_vacuum
 
 fsm_addedge_any
 fsm_addedge_epsilon
@@ -84,12 +88,12 @@ fsm_setstart
 fsm_getstart
 fsm_setend
 
-fsm_getendidcount
-fsm_getendids
+fsm_endid_count
+fsm_endid_get
+fsm_endid_set
 fsm_setendid
 fsm_mapendids
 fsm_increndids
-fsm_setendidstate
 
 fsm_countedges
 fsm_countstates

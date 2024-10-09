@@ -7,16 +7,10 @@
 #ifndef FSM_H
 #define FSM_H
 
-/*
- * TODO: This API needs quite some refactoring. Mostly we ought to operate
- * in-place, else the user would only free() everything. Having an explicit
- * clone interface leaves the option for duplicating, if they wish. However be
- * careful about leaving things in an indeterminate state; everything ought to
- * be atomic.
- */
+#include <stdbool.h>
 
 struct fsm;
-struct fsm_options;
+struct fsm_alloc;
 struct path; /* XXX */
 struct fsm_capture;
 struct fsm_combine_info;
@@ -35,28 +29,29 @@ typedef unsigned int fsm_end_id_t;
 
 #define FSM_END_ID_MAX UINT_MAX
 
-/* struct used to return a collection of end IDs. */
-struct fsm_end_ids {
-	unsigned count;
-	fsm_end_id_t ids[1];
-};
-
 /*
  * Create a new FSM. This is to be freed with fsm_free(). A structure allocated
  * from fsm_new() is expected to be passed as the "fsm" argument to the
  * functions in this API.
  *
- * An options pointer may be passed for control over various details of
- * FSM construction and output. This may be NULL, in which case default
- * options are used.
+ * An fsm_alloc pointer may be passed for callbacks on memory allocation.
+ * This may be NULL, in which case the default libc functions are used.
  * When non-NULL, the storage pointed to must remain extant until fsm_free().
  *
  * Returns NULL on error; see errno.
  * TODO: perhaps automatically create a start state, and never have an empty FSM
- * TODO: also fsm_parse should create an FSM, not add into an existing one
  */
 struct fsm *
-fsm_new(const struct fsm_options *opt);
+fsm_new(const struct fsm_alloc *alloc);
+
+/*
+ * As fsm_new(), but with an explicit number of pre-allocated states.
+ * This is intended to save on internal reallocations for situations
+ * where it's known in advance exactly how many states an FSM will have.
+ * You can still add more states per usual.
+ */
+struct fsm *
+fsm_new_statealloc(const struct fsm_alloc *alloc, size_t statealloc);
 
 /*
  * Free a structure created by fsm_new(), and all of its contents.
@@ -70,14 +65,6 @@ fsm_free(struct fsm *fsm);
  */
 struct fsm *
 fsm_clone(const struct fsm *fsm);
-
-/* Returns the options of an FSM */
-const struct fsm_options *
-fsm_getoptions(const struct fsm *fsm);
-
-/* Sets the options of an FSM */
-void
-fsm_setoptions(struct fsm *fsm, const struct fsm_options *opts);
 
 /*
  * Copy the contents of src over dst, and free src.
@@ -211,29 +198,30 @@ fsm_setendid(struct fsm *fsm, fsm_end_id_t id);
  * Returns 1 on success, 0 on error.
  * */
 int
-fsm_setendidstate(struct fsm *fsm, fsm_state_t end_state, fsm_end_id_t id);
+fsm_endid_set(struct fsm *fsm, fsm_state_t end_state, fsm_end_id_t id);
 
 /* Get the end IDs associated with an end state, if any.
- * If id_buf has enough cells to store all the end IDs (according
- * to id_buf_count) then they are written into id_buf[] and
- * *ids_written is set to the number of IDs. The end IDs in the
- * buffer may appear in any order, but should not have duplicates.
+ * id_buf is expected to have enough cells (according to id_buf_count)
+ * to store all the end IDs. You can find this with fsm_endid_count().
+ *
+ * The end IDs in the buffer are sorted and do not have duplicates.
+ *
+ * A state with no end IDs set is considered equivalent to a state
+ * that has the empty set, this API does not distinguish these cases.
+ * This is not an error.
+ *
+ * It is an error to attempt to get end IDs associated with a state
+ * that is not marked as an end state.
  *
  * Returns 0 if there is not enough space in id_buf for the
  * end IDs, or 1 if zero or more end IDs were returned. */
-enum fsm_getendids_res {
-	FSM_GETENDIDS_NOT_FOUND,
-	FSM_GETENDIDS_FOUND,
-	FSM_GETENDIDS_ERROR_INSUFFICIENT_SPACE = -1
-};
-enum fsm_getendids_res
-fsm_getendids(const struct fsm *fsm, fsm_state_t end_state,
-    size_t id_buf_count, fsm_end_id_t *id_buf,
-    size_t *ids_written);
+int
+fsm_endid_get(const struct fsm *fsm, fsm_state_t end_state,
+    size_t id_buf_count, fsm_end_id_t *id_buf);
 
 /* Get the number of end IDs associated with an end state. */
 size_t
-fsm_getendidcount(const struct fsm *fsm, fsm_state_t end_state);
+fsm_endid_count(const struct fsm *fsm, fsm_state_t end_state);
 
 /* Callback function to remap the end ids of a state.  This function can
  * remap to fewer end ids, but cannot add additional end ids, and cannot
@@ -492,6 +480,12 @@ int fsm_fgetc(void *opaque); /* expects opaque to be FILE *  */
 /* Shuffle the state IDs in the FSM. This is mainly useful for testing. */
 int
 fsm_shuffle(struct fsm *fsm, unsigned seed);
+
+/* Attempt to reclaim memory if an FSM has significantly reduced its
+ * state count. Returns true if the vacuuming attempt succeeded (including
+ * deciding not to do anything), false if realloc failed. */
+bool
+fsm_vacuum(struct fsm *fsm);
 
 #endif
 

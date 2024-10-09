@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 
 #include <fsm/fsm.h>
@@ -17,6 +18,7 @@
 #include <adt/edgeset.h>
 
 #include "internal.h"
+#include "endids.h"
 
 int
 fsm_addstate(struct fsm *fsm, fsm_state_t *state)
@@ -35,7 +37,7 @@ fsm_addstate(struct fsm *fsm, fsm_state_t *state)
 		struct fsm_state *tmp;
 		size_t i;
 
-		tmp = f_realloc(fsm->opt->alloc, fsm->states, n * sizeof *fsm->states);
+		tmp = f_realloc(fsm->alloc, fsm->states, n * sizeof *fsm->states);
 		if (tmp == NULL) {
 			return 0;
 		}
@@ -128,7 +130,7 @@ fsm_removestate(struct fsm *fsm, fsm_state_t state)
 	}
 
 	state_set_free(fsm->states[state].epsilons);
-	edge_set_free(fsm->opt->alloc, fsm->states[state].edges);
+	edge_set_free(fsm->alloc, fsm->states[state].edges);
 
 	if (fsm_getstart(fsm, &start) && start == state) {
 		fsm_clearstart(fsm);
@@ -148,7 +150,7 @@ fsm_removestate(struct fsm *fsm, fsm_state_t state)
 
 		for (i = 0; i < fsm->statecount - 1; i++) {
 			state_set_replace(&fsm->states[i].epsilons, fsm->statecount - 1, state);
-			if (!edge_set_replace_state(&fsm->states[i].edges, fsm->opt->alloc, fsm->statecount - 1, state)) {
+			if (!edge_set_replace_state(&fsm->states[i].edges, fsm->alloc, fsm->statecount - 1, state)) {
 				return 0;
 			}
 		}
@@ -177,8 +179,8 @@ fsm_compact_states(struct fsm *fsm,
 	size_t kept, removed_count;
 	const fsm_state_t orig_statecount = fsm->statecount;
 
-	fsm_state_t *mapping = f_malloc(fsm->opt->alloc,
-	    fsm->statecount * sizeof(mapping[0]));
+	fsm_state_t *mapping = f_malloc(fsm->alloc,
+	    orig_statecount * sizeof(mapping[0]));
 	if (mapping == NULL) {
 		return 0;
 	}
@@ -223,7 +225,7 @@ fsm_compact_states(struct fsm *fsm,
 #endif
 		state_set_compact(&s->epsilons, mapping_cb, mapping);
 		if (fsm->states[i].edges != NULL) {
-			edge_set_compact(&s->edges, fsm->opt->alloc, mapping_cb, mapping);
+			edge_set_compact(&s->edges, fsm->alloc, mapping_cb, mapping);
 		}
 	}
 
@@ -232,7 +234,7 @@ fsm_compact_states(struct fsm *fsm,
 		assert(dst <= i);
 		if (mapping[i] == FSM_STATE_REMAP_NO_STATE) { /* dead */
 			state_set_free(fsm->states[i].epsilons);
-			edge_set_free(fsm->opt->alloc, fsm->states[i].edges);
+			edge_set_free(fsm->alloc, fsm->states[i].edges);
 
 			fsm->statecount--;
 			removed_count++;
@@ -253,6 +255,10 @@ fsm_compact_states(struct fsm *fsm,
 		}
 	}
 
+	/* Remap end metadata */
+	if (!fsm_endid_compact(fsm, mapping, orig_statecount)) {
+		return 0;
+	}
 	assert(dst == kept);
 	assert(kept == fsm->statecount);
 
@@ -272,7 +278,7 @@ fsm_compact_states(struct fsm *fsm,
 		/* todo: resize backing array, if significantly smaller? */
 	}
 
-	f_free(fsm->opt->alloc, mapping);
+	f_free(fsm->alloc, mapping);
 
 	if (removed != NULL) {
 		*removed = removed_count;
