@@ -96,7 +96,7 @@ run_test(const struct eager_output_test *test, bool minimise, bool allow_extra_o
 			/*     __func__, fsms_used, p, e->anchored_start, e->anchored_end); */
 		}
 
-		struct fsm *fsm = re_comp(RE_NATIVE, fsm_sgetc, &p, NULL, 0, NULL);
+		struct fsm *fsm = re_comp(RE_PCRE, fsm_sgetc, &p, NULL, 0, NULL);
 		assert(fsm != NULL);
 
 		/* Zero is used to terminate expected_ids, so don't use it here. */
