@@ -226,7 +226,7 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	}
 	fprintf(f,
 	    "\t\t%s_cdata_state dst_table[%zd];\n",
-	    prefix, config->dst_buf.used);
+	    prefix, config->dst_buf.used == 0 ? 1 : config->dst_buf.used);
 
 	if (has_endids) {
 		if (comments) {
@@ -383,6 +383,10 @@ generate_data(FILE *f, const struct cdata_config *config,
 	for (size_t i = 0; i < config->dst_buf.used; i++) {
 		if ((i & 15) == 0) { fprintf(f, "\n\t\t\t"); }
 		fprintf(f, " %u,", config->dst_buf.buf[i]);
+	}
+	if (config->dst_buf.used == 0) {
+		/* Avoid "error: use of GNU empty initializer extension". */
+		fprintf(f, " 0, /* empty */");
 	}
 
 	/* edges */
