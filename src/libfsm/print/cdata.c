@@ -937,9 +937,11 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 		assert(!u64bitset_get(si->label_group_starts, r->start));
 		u64bitset_set(si->label_group_starts, r->start);
 
-		for (uint8_t c = r->start; c <= r->end; c++) {
-			assert(!u64bitset_get(si->labels, c));
-			u64bitset_set(si->labels, c);
+		for (uint16_t c = r->start; c <= r->end; c++) {
+			/* c is a uint16_t to avoid rollover for { .start=255,.end=255 }. */
+			const uint8_t c8 = (uint8_t)c;
+			assert(!u64bitset_get(si->labels, c8));
+			u64bitset_set(si->labels, c8);
 		}
 	}
 
