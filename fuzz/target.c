@@ -422,6 +422,11 @@ fsm_eager_output_dump(FILE *f, const struct fsm *fsm);
 static int
 fuzz_eager_output(const uint8_t *data, size_t size)
 {
+	if (size > 0) {
+		const unsigned seed = data[0];
+		srand(seed);
+	}
+
 	struct feo_env env = {
 		.ok = true,
 		.pattern_count = 0,
@@ -445,9 +450,6 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 	int ret = 0;
 
 	size_t max_pattern_length = 0;
-
-	const unsigned seed = size == 0 ? 0 : data[0];
-	srand(seed);
 
 	/* chop data into a series of patterns */
 	{
@@ -506,13 +508,14 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 		}
 	}
 
-	struct re_anchoring_info anchorage[MAX_PATTERNS] = {0};
+	enum re_is_anchored_res anchorage[MAX_PATTERNS] = {0};
 
 	/* for each pattern, attempt to compile to a DFA */
 	for (size_t p_i = 0; p_i < env.pattern_count; p_i++) {
 		const char *p = env.patterns[p_i];
 
-		if (!re_is_anchored(RE_PCRE, fsm_sgetc, &p, 0, NULL, &anchorage[p_i])) {
+		enum re_is_anchored_res a = re_is_anchored(RE_PCRE, fsm_sgetc, &p, 0, NULL);
+		if (a == RE_IS_ANCHORED_ERROR) {
 			continue; /* unsupported regex */
 		}
 
@@ -602,8 +605,8 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 			}
 
 			entries[used].fsm = cp;
-			entries[used].anchored_start = anchorage[i].start;
-			entries[used].anchored_end = anchorage[i].end;
+			entries[used].anchored_start = anchorage[i] & RE_IS_ANCHORED_START;
+			entries[used].anchored_end = anchorage[i] & RE_IS_ANCHORED_END;
 			used++;
 		}
 
@@ -648,7 +651,7 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 	 * Use the combined DFA to generate matches, check that the
 	 * match behavior agrees with the individual DFA copies. */
 	env.current_pattern = (size_t)-1;
-	if (!fsm_generate_matches(env.combined, max_pattern_length, seed, gen_combined_check_individual_cb, &env)) {
+	if (!fsm_generate_matches(env.combined, max_pattern_length, 1, gen_combined_check_individual_cb, &env)) {
 		goto cleanup;
 	}
 
@@ -658,7 +661,7 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 	/* check behavior against the combined DFA. */
 	for (size_t i = 0; i < env.pattern_count; i++) {
 		env.current_pattern = i;
-		if (!fsm_generate_matches(env.combined, max_pattern_length, seed, gen_individual_check_combined_cb, &env)) {
+		if (!fsm_generate_matches(env.combined, max_pattern_length, 1, gen_individual_check_combined_cb, &env)) {
 			goto cleanup;
 		}
 	}

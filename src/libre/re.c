@@ -335,37 +335,40 @@ error:
 	return -1;
 }
 
-/* FIXME: placeholder interface */
-int
+enum re_is_anchored_res
 re_is_anchored(enum re_dialect dialect, re_getchar_fun *getc, void *opaque,
-	enum re_flags flags, struct re_err *err,
-	struct re_anchoring_info *info)
+	enum re_flags flags, struct re_err *err)
 {
-	/* FIXME: copy/pasted from above, factor out common */
+	/* FIXME: copy/pasted from above, factor out common code later. */
 
 	struct ast *ast;
 	const struct dialect *m;
 	int unsatisfiable;
 
 	assert(getc != NULL);
-	assert(info != NULL);
 
 	m = re_dialect(dialect);
 	if (m == NULL) {
 		if (err != NULL) { err->e = RE_EBADDIALECT; }
-		return 0;
+		return RE_IS_ANCHORED_ERROR;
 	}
 
 	flags |= m->flags;
 
 	ast = re_parse(dialect, getc, opaque, flags, err, &unsatisfiable);
 	if (ast == NULL) {
-		return 0;
+		return RE_IS_ANCHORED_ERROR;
 	}
 
-	info->start = (ast->expr->flags & AST_FLAG_ANCHORED_START) != 0;
-	info->end = (ast->expr->flags & AST_FLAG_ANCHORED_END) != 0;
+	/* Copy anchoring flags, ending up with NONE, START, END, or BOTH. */
+	enum re_is_anchored_res res = RE_IS_ANCHORED_NONE;
+	if (ast->expr->flags & AST_FLAG_ANCHORED_START) {
+		res |= RE_IS_ANCHORED_START;
+	}
+	if (ast->expr->flags & AST_FLAG_ANCHORED_END) {
+		res |= RE_IS_ANCHORED_END;
+	}
 
 	ast_free(ast);
-	return 1;
+	return res;
 }
