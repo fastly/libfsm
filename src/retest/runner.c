@@ -83,11 +83,22 @@ print(const struct fsm *fsm,
 		fprintf(f, "#include <string.h>\n\n");
 	}
 
+	/* the cdata codegen uses fixed-width numeric types, bool, size_t,
+	 * fprintf, isprint, and C99 designated initializers */
+	if (impl == IMPL_CDATA) {
+		fprintf(f, "#include <stdint.h>\n\n");
+		fprintf(f, "#include <stdbool.h>\n\n");
+		fprintf(f, "#include <stdlib.h>\n\n");
+		fprintf(f, "#include <stdio.h>\n\n");
+		fprintf(f, "#include <ctype.h>\n\n");
+	}
+
 	{
 		int e;
 
 		switch (impl) {
 		case IMPL_C:     e = fsm_print(f, fsm, opt, hooks, FSM_PRINT_C);         break;
+		case IMPL_CDATA: e = fsm_print(f, fsm, opt, hooks, FSM_PRINT_CDATA);     break;
 		case IMPL_RUST:  e = fsm_print(f, fsm, opt, hooks, FSM_PRINT_RUST);      break;
 		case IMPL_LLVM:  e = fsm_print(f, fsm, opt, hooks, FSM_PRINT_LLVM);      break;
 		case IMPL_VMC:   e = fsm_print(f, fsm, opt, hooks, FSM_PRINT_VMC);       break;
@@ -156,6 +167,17 @@ compile(enum implementation impl,
 		}
 
 		break;
+
+	case IMPL_CDATA:	/* requires c99 for designated initializers */
+		if (0 != systemf("%s %s -shared -fPIC %s -o %s",
+				cc ? cc : "gcc", cflags ? cflags : "-std=c99 -pedantic -Wall -Werror -O3",
+				tmp_src, tmp_so))
+		{
+			return 0;
+		}
+
+		break;
+
 
 	case IMPL_RUST:
 		if (0 != systemf("%s %s -C opt-level=3 --crate-type dylib %s -o %s",
@@ -309,6 +331,7 @@ runner_init_compiled(struct fsm *fsm,
 	switch (impl) {
 	case IMPL_VMOPS:
 	case IMPL_C:
+	case IMPL_CDATA:
 	case IMPL_VMC:   tmp_src = tmp_src_c;  break;
 	case IMPL_RUST:  tmp_src = tmp_src_rs; break;
 	case IMPL_LLVM:  tmp_src = tmp_src_ll; break;
@@ -362,6 +385,7 @@ runner_init_compiled(struct fsm *fsm,
 	/* XXX: depends on IO API */
 	switch (r->impl) {
 	case IMPL_C:
+	case IMPL_CDATA:
 	case IMPL_VMC:
 		r->u.impl_c.h = h;
 		r->u.impl_c.func = (int (*)(const char *, const char *)) (uintptr_t) dlsym(h, "fsm_main");
@@ -418,6 +442,7 @@ fsm_runner_initialize(struct fsm *fsm, const struct fsm_options *opt,
 
 	switch (impl) {
 	case IMPL_C:
+	case IMPL_CDATA:
 	case IMPL_LLVM:
 	case IMPL_RUST:
 	case IMPL_VMASM:
@@ -448,6 +473,7 @@ fsm_runner_finalize(struct fsm_runner *r)
 
 	switch (r->impl) {
 	case IMPL_C:
+	case IMPL_CDATA:
 	case IMPL_VMC:
 	case IMPL_VMOPS:
 		if (r->u.impl_c.h != NULL) {
@@ -499,6 +525,7 @@ fsm_runner_run(const struct fsm_runner *r, const char *s, size_t n)
 
 	switch (r->impl) {
 	case IMPL_C:
+	case IMPL_CDATA:
 	case IMPL_VMC:
 	case IMPL_VMOPS:
 		assert(r->u.impl_c.func != NULL);
