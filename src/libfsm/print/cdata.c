@@ -605,8 +605,9 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 		case AMBIG_ERROR:
 		case AMBIG_EARLIEST:
 			fprintf(f,
-			    "\t\t*id = endid_base;\n"
-			    "\t\t(void)endid_count;\n");
+			    "\t\t*id = *endid_base;\n"
+			    "\t\t(void)endid_count;\n"
+			    "\t}\n");
 			break;
 
 		case AMBIG_MULTIPLE:
@@ -1198,7 +1199,7 @@ fsm_print_cdata(FILE *f,
 		case AMBIG_ERROR:
 		case AMBIG_EARLIEST:
 			fprintf(f, ",\n");
-			fprintf(f, "\tconst unsigned *id");
+			fprintf(f, "\tunsigned *id");
 			break;
 
 		case AMBIG_MULTIPLE:
