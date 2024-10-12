@@ -422,6 +422,11 @@ fsm_eager_output_dump(FILE *f, const struct fsm *fsm);
 static int
 fuzz_eager_output(const uint8_t *data, size_t size)
 {
+	if (size > 0) {
+		unsigned seed = data[0];
+		srand(seed);
+	}
+
 	struct feo_env env = {
 		.ok = true,
 		.pattern_count = 0,
@@ -646,7 +651,7 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 	 * Use the combined DFA to generate matches, check that the
 	 * match behavior agrees with the individual DFA copies. */
 	env.current_pattern = (size_t)-1;
-	if (!fsm_generate_matches(env.combined, max_pattern_length, gen_combined_check_individual_cb, &env)) {
+	if (!fsm_generate_matches(env.combined, max_pattern_length, 1, gen_combined_check_individual_cb, &env)) {
 		goto cleanup;
 	}
 
@@ -656,7 +661,7 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 	/* check behavior against the combined DFA. */
 	for (size_t i = 0; i < env.pattern_count; i++) {
 		env.current_pattern = i;
-		if (!fsm_generate_matches(env.combined, max_pattern_length, gen_individual_check_combined_cb, &env)) {
+		if (!fsm_generate_matches(env.combined, max_pattern_length, 1, gen_individual_check_combined_cb, &env)) {
 			goto cleanup;
 		}
 	}
