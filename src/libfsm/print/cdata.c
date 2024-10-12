@@ -1026,7 +1026,7 @@ populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
 	config->start = ir->start;
 	config->state_count = ir->n;
 
-	config->state_info = malloc(ir->n * sizeof(config->state_info[0]));
+	config->state_info = calloc(ir->n, sizeof(config->state_info[0]));
 	assert(config->state_info != NULL);
 
 	/* could just memset this to 0xff, but this is explicit */
