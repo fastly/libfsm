@@ -635,7 +635,9 @@ append_endid(struct endid_buf *buf, uint64_t id)
 	if (buf->used == buf->ceil) {
 		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
 		unsigned *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
-		if (nbuf == NULL) { return false; }
+		if (nbuf == NULL) {
+			return false;
+		}
 		buf->buf = nbuf;
 		buf->ceil = nceil;
 	}
@@ -743,7 +745,9 @@ append_eager_output(struct eager_output_buf *buf, uint64_t id)
 	if (buf->used == buf->ceil) {
 		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
 		uint64_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
-		assert(nbuf != NULL);
+		if (nbuf == NULL) {
+			return false;
+		}
 		buf->buf = nbuf;
 		buf->ceil = nceil;
 	}
@@ -856,7 +860,9 @@ append_dst(struct dst_buf *buf, uint32_t dst)
 	if (buf->used == buf->ceil) {
 		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
 		uint32_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
-		assert(nbuf != NULL);
+		if (nbuf == NULL) {
+			return false;
+		}
 		buf->buf = nbuf;
 		buf->ceil = nceil;
 	}
