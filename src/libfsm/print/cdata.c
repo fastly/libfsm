@@ -281,6 +281,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 			for (size_t i = 0; i < 256; i++) {
 				if (si->labels[i/64] & ((uint64_t)1 << (i & 63))) {
 					char c = (char)i;
+					if (c == '\\') { c = '.'; }
 					fprintf(f, "%c", isprint(c) ? c : '.');
 				}
 			}
@@ -295,6 +296,7 @@ generate_data(FILE *f, const struct cdata_config *config,
 			for (size_t i = 0; i < 256; i++) {
 				if (si->label_group_starts[i/64] & ((uint64_t)1 << (i & 63))) {
 					char c = (char)i;
+					if (c == '\\') { c = '.'; }
 					fprintf(f, "%c", isprint(c) ? c : '.');
 					dst_count++;
 				}
