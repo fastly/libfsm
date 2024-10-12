@@ -447,6 +447,7 @@ fuzz_eager_output(const uint8_t *data, size_t size)
 	size_t max_pattern_length = 0;
 
 	const unsigned seed = size == 0 ? 0 : data[0];
+	srand(seed);
 
 	/* chop data into a series of patterns */
 	{
