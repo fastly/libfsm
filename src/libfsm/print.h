@@ -61,6 +61,7 @@ typedef int fsm_print_f(FILE *f,
 	const struct fsm *fsm);
 
 typedef int ir_print_f(FILE *f,
+	const struct fsm_alloc *alloc,
 	const struct fsm_options *opt,
 	const struct fsm_hooks *hooks,
 	const struct ir *ir);
@@ -88,6 +89,7 @@ vm_print_f fsm_print_llvm;
 vm_print_f fsm_print_rust;
 vm_print_f fsm_print_sh;
 vm_print_f fsm_print_vmc;
+ir_print_f fsm_print_cdata;
 
 vm_print_f fsm_print_vmdot;
 vm_print_f fsm_print_vmops_c;

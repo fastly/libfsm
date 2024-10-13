@@ -423,7 +423,7 @@ static int
 fuzz_eager_output(const uint8_t *data, size_t size)
 {
 	if (size > 0) {
-		unsigned seed = data[0];
+		const unsigned seed = data[0];
 		srand(seed);
 	}
 

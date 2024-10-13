@@ -27,6 +27,7 @@ enum error_type {
 
 enum implementation {
 	IMPL_C,
+	IMPL_CDATA,
 	IMPL_GO,
 	IMPL_GOASM,
 	IMPL_INTERPRET,

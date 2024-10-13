@@ -327,6 +327,8 @@ fsm_print(FILE *f, const struct fsm *fsm,
 	case FSM_PRINT_VMC:        print_vm  = fsm_print_vmc;        break;
 	case FSM_PRINT_VMDOT:      print_vm  = fsm_print_vmdot;      break;
 
+	case FSM_PRINT_CDATA:      print_ir  = fsm_print_cdata;      break;
+
 	case FSM_PRINT_VMOPS_C:    print_vm  = fsm_print_vmops_c;    break;
 	case FSM_PRINT_VMOPS_H:    print_vm  = fsm_print_vmops_h;    break;
 	case FSM_PRINT_VMOPS_MAIN: print_vm  = fsm_print_vmops_main; break;
@@ -363,7 +365,7 @@ fsm_print(FILE *f, const struct fsm *fsm,
 	}
 
 	if (print_ir != NULL) {
-		r = print_ir(f, opt, hooks, ir);
+		r = print_ir(f, fsm->alloc, opt, hooks, ir);
 		goto done;
 	}
 

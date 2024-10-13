@@ -175,6 +175,7 @@ usage(void)
 	fprintf(stderr, "                 vm        interpret vm instructions (default)\n");
 	fprintf(stderr, "                 asm/goasm generate assembly and assemble\n");
 	fprintf(stderr, "                 c         compile as per fsm_print_c()\n");
+	fprintf(stderr, "                 cdata     compile as per fsm_print_cdata()\n");
 	fprintf(stderr, "                 vmc       compile as per fsm_print_vmc()\n");
 	fprintf(stderr, "                 vmops     compile as per fsm_print_vmops_{c,h,main}()\n");
 	fprintf(stderr, "                 rust      compile as per fsm_print_rust()\n");
@@ -1274,6 +1275,8 @@ main(int argc, char *argv[])
 					impl = IMPL_VMASM;
 				} else if (strcmp(optarg, "c") == 0) {
 					impl = IMPL_C;
+				} else if (strcmp(optarg, "cdata") == 0) {
+					impl = IMPL_CDATA;
 				} else if (strcmp(optarg, "go") == 0) {
 					impl = IMPL_GO;
 				} else if (strcmp(optarg, "goasm") == 0) {

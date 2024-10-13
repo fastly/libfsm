@@ -705,6 +705,7 @@ print_name(const char *name, enum fsm_ambig ambig)
 		enum fsm_ambig mask;
 	} a[] = {
 		{ "c",          FSM_PRINT_VMC,        AMBIG_ANY   },
+		{ "cdata",      FSM_PRINT_CDATA,      AMBIG_ANY   },
 		{ "dot",        FSM_PRINT_DOT,        AMBIG_ANY   },
 		{ "fsm",        FSM_PRINT_FSM,        AMBIG_ANY   },
 		{ "rust",       FSM_PRINT_RUST,       AMBIG_ANY   },

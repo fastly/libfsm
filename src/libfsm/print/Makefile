@@ -11,6 +11,7 @@ SRC += src/libfsm/print/irdot.c
 SRC += src/libfsm/print/irjson.c
 SRC += src/libfsm/print/json.c
 SRC += src/libfsm/print/llvm.c
+SRC += src/libfsm/print/cdata.c
 SRC += src/libfsm/print/rust.c
 SRC += src/libfsm/print/sh.c
 SRC += src/libfsm/print/vmasm.c
