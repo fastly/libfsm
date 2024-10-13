@@ -100,6 +100,8 @@ size_needed(size_t max_value)
 /* Configuration. Figure out whether we really need a uint32_t for edge offsets
  * or can get by with a uint16_t, etc. and make the output more dense. */
 struct cdata_config {
+	const struct fsm_alloc *alloc;
+
 	fsm_state_t start;
 	size_t state_count;
 
@@ -637,11 +639,11 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 }
 
 static bool
-append_endid(struct endid_buf *buf, uint64_t id)
+append_endid(const struct fsm_alloc *alloc, struct endid_buf *buf, uint64_t id)
 {
 	if (buf->used == buf->ceil) {
 		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
-		unsigned *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
+		unsigned *nbuf = f_realloc(alloc, buf->buf, nceil * sizeof(nbuf[0]));
 		if (nbuf == NULL) {
 			return false;
 		}
@@ -725,7 +727,7 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 	 * will be falsely associated with this state's as well. */
 	if (config->endid_buf.used > 0
 	    && endids->ids[0] > config->endid_buf.buf[config->endid_buf.used - 1]) {
-		if (!append_endid(&config->endid_buf, 0)) {
+		if (!append_endid(config->alloc, &config->endid_buf, 0)) {
 			return false;
 		}
 	}
@@ -736,7 +738,7 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 		if (endids->ids[i] > config->max_endid) {
 			config->max_endid = endids->ids[i];
 		}
-		if (!append_endid(&config->endid_buf, endids->ids[i])) {
+		if (!append_endid(config->alloc, &config->endid_buf, endids->ids[i])) {
 			return false;
 		}
 	}
@@ -747,11 +749,11 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 }
 
 static bool
-append_eager_output(struct eager_output_buf *buf, uint64_t id)
+append_eager_output(const struct fsm_alloc *alloc, struct eager_output_buf *buf, uint64_t id)
 {
 	if (buf->used == buf->ceil) {
 		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
-		uint64_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
+		uint64_t *nbuf = f_realloc(alloc, buf->buf, nceil * sizeof(nbuf[0]));
 		if (nbuf == NULL) {
 			return false;
 		}
@@ -825,7 +827,7 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 	/* If necessary add a 0, as in save_state_endids above. */
 	if (config->eager_output_buf.used > 0
 	    && eager_outputs->ids[0] > config->eager_output_buf.buf[config->eager_output_buf.used - 1]) {
-		if (!append_eager_output(&config->eager_output_buf, 0)) {
+		if (!append_eager_output(config->alloc, &config->eager_output_buf, 0)) {
 			return false;
 		}
 	}
@@ -837,7 +839,7 @@ save_state_eager_outputs(struct cdata_config *config, const struct ir_state_eage
 			config->max_eager_output_id = eager_outputs->ids[i];
 		}
 
-		if (!append_eager_output(&config->eager_output_buf, eager_outputs->ids[i])) {
+		if (!append_eager_output(config->alloc, &config->eager_output_buf, eager_outputs->ids[i])) {
 			return false;
 		}
 	}
@@ -862,11 +864,11 @@ cmp_outgoing(const void *pa, const void *pb)
 }
 
 static bool
-append_dst(struct dst_buf *buf, uint32_t dst)
+append_dst(const struct fsm_alloc *alloc, struct dst_buf *buf, uint32_t dst)
 {
 	if (buf->used == buf->ceil) {
 		const size_t nceil = buf->ceil == 0 ? 8 : 2*buf->ceil;
-		uint32_t *nbuf = realloc(buf->buf, nceil * sizeof(nbuf[0]));
+		uint32_t *nbuf = f_realloc(alloc, buf->buf, nceil * sizeof(nbuf[0]));
 		if (nbuf == NULL) {
 			return false;
 		}
@@ -1009,7 +1011,7 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 	const size_t base = dst_buf->used;
 	for (size_t o_i = 0; o_i < outgoing_used; o_i++) {
 		const struct range_info *r = &outgoing[o_i];
-		if (!append_dst(dst_buf, r->dst_state)) {
+		if (!append_dst(config->alloc, dst_buf, r->dst_state)) {
 			return false;
 		}
 	}
@@ -1020,13 +1022,14 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 }
 
 static bool
-populate_config_from_ir(struct cdata_config *config, const struct ir *ir)
+populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *alloc, const struct ir *ir)
 {
 	memset(config, 0x00, sizeof(*config));
+	config->alloc = alloc;
 	config->start = ir->start;
 	config->state_count = ir->n;
 
-	config->state_info = calloc(ir->n, sizeof(config->state_info[0]));
+	config->state_info = f_calloc(config->alloc, ir->n, sizeof(config->state_info[0]));
 	assert(config->state_info != NULL);
 
 	/* could just memset this to 0xff, but this is explicit */
@@ -1133,7 +1136,7 @@ fsm_print_cdata(FILE *f,
 
 	/* First pass, figure out totals and index sizes */
 	struct cdata_config config;
-	populate_config_from_ir(&config, ir);
+	populate_config_from_ir(&config, alloc, ir);
 
 #if LOG_SIZES
 	fprintf(stderr, "// config: dst_state_count %zu, start %d, dst_buf.used %zd, endid_buf.used %zd, eager_output_buf.used %zd\n",
@@ -1242,10 +1245,10 @@ fsm_print_cdata(FILE *f,
 		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
 	}
 
-	free(config.dst_buf.buf);
-	free(config.endid_buf.buf);
-	free(config.eager_output_buf.buf);
-	free(config.state_info);
+	f_free(alloc, config.dst_buf.buf);
+	f_free(alloc, config.endid_buf.buf);
+	f_free(alloc, config.eager_output_buf.buf);
+	f_free(alloc, config.state_info);
 
 	return 0;
 }
