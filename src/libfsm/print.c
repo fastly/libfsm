@@ -365,7 +365,7 @@ fsm_print(FILE *f, const struct fsm *fsm,
 	}
 
 	if (print_ir != NULL) {
-		r = print_ir(f, opt, hooks, ir);
+		r = print_ir(f, fsm->alloc, opt, hooks, ir);
 		goto done;
 	}
 

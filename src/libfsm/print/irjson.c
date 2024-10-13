@@ -222,11 +222,13 @@ print_state(FILE *f,
 
 int
 fsm_print_irjson(FILE *f,
+	const struct fsm_alloc *alloc,
 	const struct fsm_options *opt,
 	const struct fsm_hooks *hooks,
 	const struct ir *ir)
 {
 	size_t i;
+	(void)alloc;
 
 	assert(f != NULL);
 	assert(opt != NULL);

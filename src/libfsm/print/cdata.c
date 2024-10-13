@@ -1118,6 +1118,7 @@ alloc_fail:
 
 int
 fsm_print_cdata(FILE *f,
+	const struct fsm_alloc *alloc,
 	const struct fsm_options *opt,
 	const struct fsm_hooks *hooks,
 	const struct ir *ir)
@@ -1127,6 +1128,7 @@ fsm_print_cdata(FILE *f,
 	assert(hooks != NULL);
 	assert(ir != NULL);
 
+	(void)alloc;
 	(void)hooks;		/* ignored, for now */
 
 	/* First pass, figure out totals and index sizes */

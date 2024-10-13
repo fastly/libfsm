@@ -61,6 +61,7 @@ typedef int fsm_print_f(FILE *f,
 	const struct fsm *fsm);
 
 typedef int ir_print_f(FILE *f,
+	const struct fsm_alloc *alloc,
 	const struct fsm_options *opt,
 	const struct fsm_hooks *hooks,
 	const struct ir *ir);

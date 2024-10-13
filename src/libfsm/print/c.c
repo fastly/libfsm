@@ -530,11 +530,13 @@ fsm_print_c_body(FILE *f, const struct ir *ir,
 
 int
 fsm_print_c(FILE *f,
+	const struct fsm_alloc *alloc,
 	const struct fsm_options *opt,
 	const struct fsm_hooks *hooks,
 	const struct ir *ir)
 {
 	const char *prefix;
+	(void)alloc;
 
 	assert(f != NULL);
 	assert(opt != NULL);
