@@ -242,7 +242,7 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 		    id_type_str(config->t_endid_value), config->endid_buf.used);
 	}
 
-	if (has_eager_outputs > 0) {
+	if (has_eager_outputs) {
 		if (comments) {
 			fprintf(f,
 			    "\n"
