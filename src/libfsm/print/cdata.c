@@ -604,21 +604,21 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 
 		switch (opt->ambig) {
 		case AMBIG_NONE:
+			fprintf(f,
+			    "\t\t(void)endid_base;\n");
 			break;
 
 		case AMBIG_ERROR:
 		case AMBIG_EARLIEST:
 			fprintf(f,
 			    "\t\t*id = *endid_base;\n"
-			    "\t\t(void)endid_count;\n"
-			    "\t}\n");
+			    "\t\t(void)endid_count;\n");
 			break;
 
 		case AMBIG_MULTIPLE:
 			fprintf(f,
 			    "\t\t*%s = endid_base;\n"
-			    "\t\t*%s = endid_count;\n"
-			    "\t}\n",
+			    "\t\t*%s = endid_count;\n",
 			    /* TODO: rename these to endid_ids and endid_count?
 			     * That will be an interface change. */
 			    "ids", "count");
@@ -628,6 +628,9 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 			assert(!"unreached");
 			abort();
 		}
+
+		fprintf(f,
+		    "\t}\n");
 	}
 
 	/* If the end state has eager_outputs, set their flags. */
