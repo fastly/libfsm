@@ -120,6 +120,9 @@ struct cdata_config {
 	enum id_type t_endid_value;
 	enum id_type t_eager_output_value;
 
+	/* numeric type for entries in .bitset_words.pairs[] */
+	enum id_type t_label_word_id;
+
 	struct dst_buf {
 		size_t ceil;
 		size_t used;
@@ -154,6 +157,17 @@ struct cdata_config {
 		size_t eager_output;
 	} *state_info;
 
+	/* Collected 64-bit word counts for the .labels and
+	 * .label_group_starts 256-bitsets. */
+	struct bitset_words {
+		size_t used;
+		size_t ceil;
+		struct bitset_word_pair {
+			uint64_t word;
+			size_t count;
+		} *pairs;
+	} bitset_words;
+
 #if LOG_REUSE
 	struct reuse_stats {
 		size_t miss;
@@ -183,11 +197,11 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	if (comments) {
 		fprintf(f,
 		    "\t\t\t/* To find the destination state for label character C,\n"
-		    "\t\t\t * check if the bit C is set in .labels[]. If so, find the\n"
-		    "\t\t\t * the 1 bit at or preceding C in .label_group_starts[],\n"
-		    "\t\t\t * which represents the start of the Nth label group, the\n"
-		    "\t\t\t * group label group that contains C. The dst state will be in\n"
-		    "\t\t\t * .dst_table[.dst_table_offset + N]. This offset N is called\n"
+		    "\t\t\t * check if the bit C is set in the word id'd by .labels[].\n"
+		    "\t\t\t * If so, find the the 1 bit at or preceding C in\n"
+		    "\t\t\t * .label_group_starts[], which represents the start of the Nth\n"
+		    "\t\t\t * label group, the group label group that contains C. The dst state will\n"
+		    "\t\t\t * be in .dst_table[.dst_table_offset + N]. This offset N is called\n"
 		    "\t\t\t * the rank, and .rank_sums has precomputed sums for each\n"
 		    "\t\t\t * word preceding .label_group_starts[C/64]. If .labels[]\n"
 		    "\t\t\t * isn't set for C, the destination is .default_dst, or the\n"
@@ -196,10 +210,13 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	}
 	fprintf(f,
 	    "\t\t\t%s_cdata_state default_dst; /* or %zu for NONE */\n"
-	    "\t\t\tuint64_t labels[256/4]; /* which labels have non-default edges */\n"
-	    "\t\t\tuint64_t label_group_starts[256/4]; /* start of each label group */\n"
+	    "\t\t\t%s label_word_ids[4]; /* which labels have non-default edges */\n"
+	    "\t\t\t%s label_group_start_word_ids[4]; /* start of each label group */\n"
 	    "\t\t\tuint8_t rank_sums[4]; /* rank at end of label_group_starts[n] */\n"
-	    "\n", prefix, config->state_count);
+	    "\n",
+	    prefix, config->state_count,
+	    id_type_str(config->t_label_word_id),
+	    id_type_str(config->t_label_word_id));
 
 	if (comments) {
 		fprintf(f, "\t\t\t/* Offsets into values in other tables */\n");
@@ -228,6 +245,14 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	fprintf(f,
 	    "\t\t} state_end_info[%zd];\n"
 	    "\n", config->state_count);
+
+	if (comments) {
+		fprintf(f,
+		    "\t\t/* Table of individual words used in label and label_group_start\n"
+		    "\t\t *  bitsets, in descending order by frequency. */\n");
+	}
+	fprintf(f,
+	    "\t\tuint64_t label_word_table[%zd];\n", config->bitset_words.used);
 
 	if (comments) {
 		fprintf(f,
@@ -267,6 +292,22 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	return true;
 }
 
+static void
+lookup_label_ids(const struct cdata_config *config, const uint64_t *labels, unsigned ids[4]) {
+	for (size_t w_i = 0; w_i < 4; w_i++) {
+		bool found = false;
+		const uint64_t w = labels[w_i];
+		for (size_t i = 0; i < config->bitset_words.used; i++) {
+			if (config->bitset_words.pairs[i].word == w) {
+				ids[w_i] = i;
+				found = true;
+				break;
+			}
+		}
+		assert(found);
+	}
+}
+
 static bool
 generate_data(FILE *f, const struct cdata_config *config,
 	bool comments, const char *prefix, const struct ir *ir)
@@ -295,8 +336,10 @@ generate_data(FILE *f, const struct cdata_config *config,
 			}
 			fprintf(f, "\n");
 		}
-		fprintf(f, "\t\t\t\t.labels = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
-		    si->labels[0], si->labels[1], si->labels[2], si->labels[3]);
+		unsigned label_ids[4];
+		lookup_label_ids(config, si->labels, label_ids);
+		fprintf(f, "\t\t\t\t.label_word_ids = { %u, %u, %u, %u },\n",
+		    label_ids[0], label_ids[1], label_ids[2], label_ids[3]);
 
 		size_t dst_count = 0;
 		if (comments) {
@@ -311,8 +354,9 @@ generate_data(FILE *f, const struct cdata_config *config,
 			}
 			fprintf(f, "\n");
 		}
-		fprintf(f, "\t\t\t\t.label_group_starts = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
-		    si->label_group_starts[0], si->label_group_starts[1], si->label_group_starts[2], si->label_group_starts[3]);
+		lookup_label_ids(config, si->label_group_starts, label_ids);
+		fprintf(f, "\t\t\t\t.label_group_start_word_ids = { %u, %u, %u, %u },\n",
+		    label_ids[0], label_ids[1], label_ids[2], label_ids[3]);
 
 		/* rank_sums[0] is always 0, but allows us to avoid a subtraction in the inner loop,
 		 * and the space would be wasted otherwise anyway due to alignment. */
@@ -393,6 +437,20 @@ generate_data(FILE *f, const struct cdata_config *config,
 		}
 		fprintf(f, "\t\t\t},\n");
 	}
+	fprintf(f, "\t\t},\n");
+
+	fprintf(f,
+	    "\t\t.label_word_table = {\n\t\t\t");
+	for (size_t i = 0; i < config->bitset_words.used; i++) {
+		fprintf(f, " 0x%016lx,", config->bitset_words.pairs[i].word);
+		if ((i & 3) == 3) {
+			fprintf(f, "\n\t\t\t");
+		}
+	}
+	if ((config->bitset_words.used & 3) != 3) {
+		fprintf(f, "\n");
+	}
+
 	fprintf(f, "\t\t},\n");
 
 	fprintf(f,
@@ -554,11 +612,14 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\tconst size_t w_i = c/64;\n"
 	    "\t\tconst size_t word_rem = c & 63;\n"
 	    "\t\tconst uint64_t bit = (uint64_t)1 << word_rem;\n"
-	    "\t\tif (state->labels[w_i] & bit) { /* if state has label */\n"
+	    "\t\tconst %s label_word_id = state->label_word_ids[w_i];\n"
+	    "\t\tconst uint64_t label_word = %s_dfa_data.label_word_table[label_word_id];\n"
+	    "\t\tif (label_word & bit) { /* if state has label */\n"
 	    "\t\t\tif (debug_traces) {\n"
 	    "\t\t\t\tfprintf(stderr, \"-- label '%%c' (0x%%02x) -> w_i %%zd, bit 0x%%016lx\\n\", isprint(c) ? c : 'c', c, w_i, bit);\n"
 	    "\t\t\t}\n"
-	    "\t\t\tconst uint64_t lgs_word = state->label_group_starts[w_i];\n"
+	    "\t\t\tconst uint64_t lgs_word_id = state->label_group_start_word_ids[w_i];\n"
+	    "\t\t\tconst uint64_t lgs_word = %s_dfa_data.label_word_table[lgs_word_id];\n"
 	    "\t\t\tconst size_t back = (lgs_word & bit) ? 0 : 1; /* back to start of label group */\n"
 	    "\t\t\tconst uint64_t mask = bit - 1;\n"
 	    "\t\t\tconst uint64_t masked_word = lgs_word & mask;\n"
@@ -583,7 +644,8 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\t\treturn 0; /* no match */\n"
 	    "\t\t}\n"
 	    "\t}\n",
-	    popcount, prefix, prefix);
+	    id_type_str(config->t_label_word_id),
+	    prefix, prefix, popcount, prefix, prefix);
 
 	/* At the end of the input, check if the current state is an end.
 	 * If not, there's no match.  */
@@ -898,6 +960,42 @@ append_dst(const struct fsm_alloc *alloc, struct dst_buf *buf, uint32_t dst)
 	return true;
 }
 
+static int
+cmp_bitset_word_pair(const void *pa, const void *pb)
+{
+	const struct bitset_word_pair *a = (const struct bitset_word_pair *)pa;
+	const struct bitset_word_pair *b = (const struct bitset_word_pair *)pb;
+
+	/* for sorting by descending count */
+	return a->count < b->count ? 1 : a->count > b->count ? -1 : 0;
+}
+
+static void
+increment_bitset_word_count(const struct fsm_alloc *alloc, struct bitset_words *bws, uint64_t w)
+{
+	/* This table tends to stay fairly small, so linear search is probably good enough. */
+	for (size_t i = 0; i < bws->used; i++) {
+		if (bws->pairs[i].word == w) {
+			bws->pairs[i].count++;
+			return;
+		}
+	}
+
+	if (bws->used == bws->ceil) {
+		const size_t nceil = (bws->ceil == 0 ? 8 : 2*bws->ceil);
+		struct bitset_word_pair *npairs = f_realloc(alloc,
+		    bws->pairs, nceil * sizeof(npairs[0]));
+		assert(npairs != NULL);
+		bws->ceil = nceil;
+		bws->pairs = npairs;
+	}
+
+	struct bitset_word_pair *p = &bws->pairs[bws->used];
+	p->word = w;
+	p->count = 1;
+	bws->used++;
+}
+
 static bool
 save_state_edge_group_destinations(struct cdata_config *config, struct state_info *si,
 	size_t group_count, const struct ir_group *groups)
@@ -964,6 +1062,12 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 			assert(!u64bitset_get(si->labels, c8));
 			u64bitset_set(si->labels, c8);
 		}
+	}
+
+	struct bitset_words *bws = &config->bitset_words;
+	for (size_t i = 0; i < 4; i++) {
+		increment_bitset_word_count(config->alloc, bws, si->labels[i]);
+		increment_bitset_word_count(config->alloc, bws, si->label_group_starts[i]);
 	}
 
 	/* Precompute label_group_starts[] rank sums so lookup only needs to
@@ -1058,6 +1162,14 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 		si->eager_output = STATE_OFFSET_NONE;
 	}
 
+	/* add a single entry for 0, in case the IR only has a single IR_NONE or IR_SAME state */
+	config->bitset_words.ceil = 1;
+	config->bitset_words.used = 1;
+	config->bitset_words.pairs = calloc(1, sizeof(config->bitset_words.pairs[0]));
+	assert(config->bitset_words.pairs != NULL);
+	config->bitset_words.pairs[0].word = 0x0;
+	config->bitset_words.pairs[0].count = 1;
+
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
 		const struct ir_state *s = &ir->states[s_i];
 
@@ -1123,6 +1235,12 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 	/* The caller expects this to be unsigned, and the current interface just sets
 	 * a pointer to the array of IDs. */
 	config->t_endid_value = UNSIGNED; //size_needed(config->max_endid);
+
+	/* Sort by use frequency, descending, so the most frequently used
+	 * bitset words will stay in cache. */
+	qsort(config->bitset_words.pairs, config->bitset_words.used,
+	    sizeof(config->bitset_words.pairs[0]), cmp_bitset_word_pair);
+	config->t_label_word_id = size_needed(config->bitset_words.used);
 
 	config->t_eager_output_value = size_needed(config->max_eager_output_id);
 	return true;
