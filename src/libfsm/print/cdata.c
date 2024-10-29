@@ -174,14 +174,10 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	    "\ttypedef %s %s_cdata_state;\n",
 	    id_type_str(config->t_state_id), prefix);
 
-	/* TODO: move .end and .endid_offset into a separate table, they aren't accessed
-	 * until the end of input, so this should slightly reduce cache misses.
-	 * Do this once there's baseline timing info. */
 	fprintf(f,
 	    "\tstruct %s_cdata_dfa {\n"
 	    "\t\t%s_cdata_state start;\n"
 	    "\t\tstruct %s_cdata_state {\n"
-	    "\t\t\tbool end; /* is this an end state? */\n"
 	    "\n", prefix, prefix, prefix);
 
 	if (comments) {
@@ -210,15 +206,27 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	}
 	fprintf(f, "\t\t\t%s dst_table_offset;\n", id_type_str(config->t_dst_state_offset));
 
-	if (has_endids) {
-		fprintf(f, "\t\t\t%s endid_offset;\n", id_type_str(config->t_endid_offset));
-	}
 	if (has_eager_outputs) {
 		fprintf(f, "\t\t\t%s eager_output_offset;\n", id_type_str(config->t_eager_output_offset));
 	}
 
 	fprintf(f,
 	    "\t\t} states[%zd];\n"
+	    "\n", config->state_count);
+
+	/* .end could be a single uint64_t bitset */
+	if (comments) {
+		fprintf(f, "\t\t/* State-associated info only checked at end of input */\n");
+	}
+	fprintf(f,
+	    "\t\tstruct %s_state_end_info {\n"
+	    "\t\t\tbool end; /* is this an end state? */\n", prefix);
+	if (has_endids) {
+		fprintf(f, "\t\t\t%s endid_offset; /* or %zu for NONE */\n",
+		    id_type_str(config->t_endid_offset), config->endid_buf.used);
+	}
+	fprintf(f,
+	    "\t\t} state_end_info[%zd];\n"
 	    "\n", config->state_count);
 
 	if (comments) {
@@ -272,8 +280,6 @@ generate_data(FILE *f, const struct cdata_config *config,
 		const struct ir_state *s = &ir->states[s_i];
 		const struct state_info *si = &config->state_info[s_i];
 
-		const bool is_end = s->isend;
-		const bool has_endids = si->endid != STATE_OFFSET_NONE;
 		const bool has_eager_outputs = si->eager_output != STATE_OFFSET_NONE;
 
 		fprintf(f, "\t\t\t[%zd] = {%s\n", s_i, s_i == config->start ? " /* start */" : "");
@@ -315,7 +321,6 @@ generate_data(FILE *f, const struct cdata_config *config,
 
 		const size_t state_NONE = config->state_count;
 		const size_t dst_table_NONE = config->dst_buf.used;
-		const size_t endid_NONE = config->endid_buf.used;
 		const size_t eager_output_NONE = config->eager_output_buf.used;
 
 		if (si->default_dst == STATE_OFFSET_NONE) {
@@ -331,32 +336,10 @@ generate_data(FILE *f, const struct cdata_config *config,
 			fprintf(f, "\t\t\t\t.default_dst = %zu,\n", si->default_dst);
 		}
 
-		fprintf(f, "\t\t\t\t.end = %d,\n", is_end);
-
 		if (si->dst == STATE_OFFSET_NONE) { /* no non-default outgoing edges */
 			fprintf(f, "\t\t\t\t.dst_table_offset = %zd, /* NONE */\n", dst_table_NONE);
 		} else {
 			fprintf(f, "\t\t\t\t.dst_table_offset = %zd,\n", si->dst);
-		}
-
-		/* Only include these if any state uses endids/eager_outputs, and
-		 * if this state doesn't then use the end of the array as NONE. */
-		if (config->endid_buf.used > 0) {
-			if (has_endids) {
-				if (comments) {
-					fprintf(f, "\t\t\t\t/* endids:");
-					for (size_t i = 0; i < s->endids.count; i++) {
-						if (i > 0 && (i & 15) == 0) {
-							fprintf(f, "\n\t\t\t\t *");
-						}
-						fprintf(f, " %u", s->endids.ids[i]);
-					}
-					fprintf(f, " */\n");
-				}
-				fprintf(f, "\t\t\t\t.endid_offset = %zd,\n", si->endid);
-			} else {
-				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* NONE */\n", endid_NONE);
-			}
 		}
 
 		if (config->eager_output_buf.used > 0) {
@@ -377,6 +360,37 @@ generate_data(FILE *f, const struct cdata_config *config,
 			}
 		}
 
+		fprintf(f, "\t\t\t},\n");
+	}
+	fprintf(f, "\t\t},\n");
+
+	fprintf(f, "\t\t.state_end_info = {\n");
+	for (size_t s_i = 0; s_i < ir->n; s_i++) {
+		const size_t endid_NONE = config->endid_buf.used;
+		const struct ir_state *s = &ir->states[s_i];
+		const struct state_info *si = &config->state_info[s_i];
+		fprintf(f, "\t\t\t[%zu] = {\n", s_i);
+		fprintf(f, "\t\t\t\t.end = %d,\n", s->isend);
+
+		/* Only include these if any state uses endids/eager_outputs, and
+		 * if this state doesn't then use the end of the array as NONE. */
+		if (config->endid_buf.used > 0) {
+			if (si->endid != STATE_OFFSET_NONE) {
+				if (comments) {
+					fprintf(f, "\t\t\t\t/* endids:");
+					for (size_t i = 0; i < s->endids.count; i++) {
+						if (i > 0 && (i & 15) == 0) {
+							fprintf(f, "\n\t\t\t\t *");
+						}
+						fprintf(f, " %u", s->endids.ids[i]);
+					}
+					fprintf(f, " */\n");
+				}
+				fprintf(f, "\t\t\t\t.endid_offset = %zd,\n", si->endid);
+			} else {
+				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* NONE */\n", endid_NONE);
+			}
+		}
 		fprintf(f, "\t\t\t},\n");
 	}
 	fprintf(f, "\t\t},\n");
@@ -574,8 +588,8 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	/* At the end of the input, check if the current state is an end.
 	 * If not, there's no match.  */
 	fprintf(f,
-	    "\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n"
-	    "\tif (!state->end) { return 0; /* no match */ }\n", prefix, prefix);
+	    "\tconst struct %s_state_end_info *state_end = &%s_dfa_data.state_end_info[cur_state];\n"
+	    "\tif (!state_end->end) { return 0; /* no match */ }\n", prefix, prefix);
 
 	/* Set the passed-in reference to the endids, if any. */
 	if (has_endids) {
@@ -586,8 +600,8 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 		 * by the first lower value. endid_table[] has an extra 0 appended
 		 * as a terminator for the last set. */
 		fprintf(f,
-		    "\tif (state->endid_offset < %s_ENDID_TABLE_COUNT) {\n"
-		    "\t\t%s *endid_scan = &%s_dfa_data.endid_table[state->endid_offset];\n"
+		    "\tif (state_end->endid_offset < %s_ENDID_TABLE_COUNT) {\n"
+		    "\t\t%s *endid_scan = &%s_dfa_data.endid_table[state_end->endid_offset];\n"
 		    "\t\tconst %s *endid_base = endid_scan;\n"
 		    "\t\tsize_t endid_count = 0;\n"
 		    "\t\tuint64_t cur, next;\n"
