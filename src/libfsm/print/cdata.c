@@ -252,7 +252,7 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 		    "\t\t *  bitsets, in descending order by frequency. */\n");
 	}
 	fprintf(f,
-	    "\t\tuint64_t label_word_table[%zd];\n", config->bitset_words.used);
+	    "\t\tuint64_t label_word_table[%zd];\n", config->bitset_words.used + 1);
 
 	if (comments) {
 		fprintf(f,
@@ -294,9 +294,20 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 
 static void
 lookup_label_ids(const struct cdata_config *config, const uint64_t *labels, unsigned ids[4]) {
+	/* Use the length of the bitset table for 0. That way, lookup can
+	 * do a range check and also make the (usually) most commonly used
+	 * value implicit and get slightly better cache behavior for the other
+	 * most common words. */
+	const unsigned zero_id = config->bitset_words.used;
+
 	for (size_t w_i = 0; w_i < 4; w_i++) {
 		bool found = false;
 		const uint64_t w = labels[w_i];
+		if (w == 0) {
+			ids[w_i] = zero_id;
+			continue;
+		}
+
 		for (size_t i = 0; i < config->bitset_words.used; i++) {
 			if (config->bitset_words.pairs[i].word == w) {
 				ids[w_i] = i;
@@ -451,7 +462,8 @@ generate_data(FILE *f, const struct cdata_config *config,
 		fprintf(f, "\n");
 	}
 
-	fprintf(f, "\t\t},\n");
+	/* add a trailing 0 in case the table is empty */
+	fprintf(f, "\t\t0, },\n");
 
 	fprintf(f,
 	    "\t\t.dst_table = {");
@@ -613,13 +625,13 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\tconst size_t word_rem = c & 63;\n"
 	    "\t\tconst uint64_t bit = (uint64_t)1 << word_rem;\n"
 	    "\t\tconst %s label_word_id = state->label_word_ids[w_i];\n"
-	    "\t\tconst uint64_t label_word = %s_dfa_data.label_word_table[label_word_id];\n"
+	    "\t\tconst uint64_t label_word = label_word_id >= %zu ? 0 : %s_dfa_data.label_word_table[label_word_id];\n"
 	    "\t\tif (label_word & bit) { /* if state has label */\n"
 	    "\t\t\tif (debug_traces) {\n"
 	    "\t\t\t\tfprintf(stderr, \"-- label '%%c' (0x%%02x) -> w_i %%zd, bit 0x%%016lx\\n\", isprint(c) ? c : 'c', c, w_i, bit);\n"
 	    "\t\t\t}\n"
 	    "\t\t\tconst uint64_t lgs_word_id = state->label_group_start_word_ids[w_i];\n"
-	    "\t\t\tconst uint64_t lgs_word = %s_dfa_data.label_word_table[lgs_word_id];\n"
+	    "\t\t\tconst uint64_t lgs_word = lgs_word_id >= %zu ? 0 : %s_dfa_data.label_word_table[lgs_word_id];\n"
 	    "\t\t\tconst size_t back = (lgs_word & bit) ? 0 : 1; /* back to start of label group */\n"
 	    "\t\t\tconst uint64_t mask = bit - 1;\n"
 	    "\t\t\tconst uint64_t masked_word = lgs_word & mask;\n"
@@ -645,7 +657,10 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\t}\n"
 	    "\t}\n",
 	    id_type_str(config->t_label_word_id),
-	    prefix, prefix, popcount, prefix, prefix);
+	    config->bitset_words.used,
+	    prefix, config->bitset_words.used,
+	    prefix,
+	    popcount, prefix, prefix);
 
 	/* At the end of the input, check if the current state is an end.
 	 * If not, there's no match.  */
@@ -979,6 +994,8 @@ cmp_bitset_word_pair(const void *pa, const void *pb)
 static void
 increment_bitset_word_count(const struct fsm_alloc *alloc, struct bitset_words *bws, uint64_t w)
 {
+	if (w == 0) { return; }	/* 0x0 is implicit */
+
 	/* This table tends to stay fairly small, so linear search is probably good enough. */
 	for (size_t i = 0; i < bws->used; i++) {
 		if (bws->pairs[i].word == w) {
@@ -1168,14 +1185,6 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 		si->eager_output = STATE_OFFSET_NONE;
 	}
 
-	/* add a single entry for 0, in case the IR only has a single IR_NONE or IR_SAME state */
-	config->bitset_words.ceil = 1;
-	config->bitset_words.used = 1;
-	config->bitset_words.pairs = calloc(1, sizeof(config->bitset_words.pairs[0]));
-	assert(config->bitset_words.pairs != NULL);
-	config->bitset_words.pairs[0].word = 0x0;
-	config->bitset_words.pairs[0].count = 1;
-
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
 		const struct ir_state *s = &ir->states[s_i];
 
@@ -1243,10 +1252,11 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 	config->t_endid_value = UNSIGNED; //size_needed(config->max_endid);
 
 	/* Sort by use frequency, descending, so the most frequently used
-	 * bitset words will stay in cache. */
+	 * bitset words will stay in cache. Reserve one extra, ensuring that
+	 * the total count can be used to represent 0x0 without rollover. */
 	qsort(config->bitset_words.pairs, config->bitset_words.used,
 	    sizeof(config->bitset_words.pairs[0]), cmp_bitset_word_pair);
-	config->t_label_word_id = size_needed(config->bitset_words.used);
+	config->t_label_word_id = size_needed(config->bitset_words.used + 1);
 
 	config->t_eager_output_value = size_needed(config->max_eager_output_id);
 	return true;
