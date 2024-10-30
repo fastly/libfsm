@@ -710,7 +710,13 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	}
 
 	/* If the end state has eager_outputs, set their flags. */
-	generate_eager_output_check(f, config, prefix);
+	if (has_eager_outputs) {
+		fprintf(f, "\t{\n");	/* add {} nesting so the tabs match */
+		fprintf(f, "\t\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n",
+		    prefix, prefix);
+		generate_eager_output_check(f, config, prefix);
+		fprintf(f, "\t}\n");
+	}
 
 	/* Got a match. */
 	fprintf(f, "\treturn 1; /* match */\n");
