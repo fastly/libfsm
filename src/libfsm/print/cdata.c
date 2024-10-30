@@ -1389,6 +1389,7 @@ fsm_print_cdata(FILE *f,
 	f_free(alloc, config.dst_buf.buf);
 	f_free(alloc, config.endid_buf.buf);
 	f_free(alloc, config.eager_output_buf.buf);
+	f_free(alloc, config.bitset_words.pairs);
 	f_free(alloc, config.state_info);
 
 	return 0;
