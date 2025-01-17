@@ -861,7 +861,7 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 		fprintf(f, "\tfor (size_t w_i = 0; w_i < %zu; w_i++) {\n", eager_output_words);
 		fprintf(f, "\t\tconst uint64_t w = uncommitted_eager_output_buf[w_i];\n");
 		fprintf(f, "\t\tif (w == 0) { continue; }\n");
-		fprintf(f, "\t\tfor (size_t bit = 1; bit < 64; bit++) {\n");
+		fprintf(f, "\t\tfor (size_t bit = 0; bit < 64; bit++) {\n");
 		fprintf(f, "\t\t\tif (w & ((uint64_t)1 << bit)) {\n");
 		fprintf(f, "\t\t\t\tconst uint64_t id = %s_dfa_data.eager_output_ids[64*w_i + bit];\n", prefix);
 		fprintf(f, "\t\t\t\teager_output_buf[id/64] |= ((uint64_t)1 << (id & 63));\n");
