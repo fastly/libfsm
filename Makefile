@@ -41,10 +41,10 @@ CFLAGS += -DEXPENSIVE_CHECKS
 DEBUG ?= 1
 .endif
 
-CFLAGS += -DNOSTRIP
-
 # combined just to save time in CI
 .if defined(AUSAN)
+CFLAGS += -DNOSTRIP
+CC ?= clang-14
 ASAN  ?= 1
 UBSAN ?= 1
 .endif
