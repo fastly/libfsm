@@ -15,7 +15,7 @@ env:
 jobs:
   checkout:
     name: "Checkout"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-20.05
 
     steps:
     - name: Cache checkout
@@ -44,7 +44,7 @@ jobs:
 
   pcre_suite:
     name: "Import PCRE suite"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-20.05
     needs: [ build ] # for cvtpcre
 
     steps:
@@ -531,7 +531,7 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-20.05
     needs: [ checkout ]
 
     env:
@@ -582,7 +582,7 @@ jobs:
 
   install:
     name: Install
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-20.05
     needs: [ build, docs ]
 
     env:
@@ -643,7 +643,7 @@ jobs:
 
   fpm:
     name: Package ${{ matrix.pkg }}
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-20.05
     needs: [ install ]
 
     env:
