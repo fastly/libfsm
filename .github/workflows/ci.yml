@@ -15,7 +15,7 @@ env:
 jobs:
   checkout:
     name: "Checkout"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Cache checkout
@@ -44,7 +44,7 @@ jobs:
 
   pcre_suite:
     name: "Import PCRE suite"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ build ] # for cvtpcre
 
     steps:
@@ -79,7 +79,7 @@ jobs:
       id: cache-build
       with:
         path: ${{ env.build }}
-        key: build-bmake-ubuntu-gcc-DEBUG-AUSAN-${{ github.sha }} # arbitary build, just for cvtpcre
+        key: build-bmake-ubuntu-gcc-DEBUG-AUSAN-${{ github.sha }} # arbitrary build, just for cvtpcre
 
     - name: Convert PCRE suite
       if: steps.cache-cvtpcre.outputs.cache-hit != 'true'
@@ -130,7 +130,7 @@ jobs:
 
   build:
     name: "Build ${{ matrix.san }} ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ${{ matrix.os }}-22.04
     needs: [ checkout ]
 
     strategy:
@@ -174,6 +174,7 @@ jobs:
         uname -a
         sudo apt-get install bmake electric-fence
         ${{ matrix.cc }} --version
+        printenv
 
     - name: Dependencies (MacOS)
       if: matrix.os == 'macos' && steps.cache-build.outputs.cache-hit != 'true'
@@ -531,7 +532,7 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ checkout ]
 
     env:
@@ -582,7 +583,7 @@ jobs:
 
   install:
     name: Install
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ build, docs ]
 
     env:
@@ -643,7 +644,7 @@ jobs:
 
   fpm:
     name: Package ${{ matrix.pkg }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ install ]
 
     env:
