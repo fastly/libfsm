@@ -15,7 +15,7 @@ env:
 jobs:
   checkout:
     name: "Checkout"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Cache checkout
@@ -44,7 +44,7 @@ jobs:
 
   pcre_suite:
     name: "Import PCRE suite"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ build ] # for cvtpcre
 
     steps:
@@ -130,7 +130,7 @@ jobs:
 
   build:
     name: "Build ${{ matrix.san }} ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     needs: [ checkout ]
 
     strategy:
@@ -216,7 +216,7 @@ jobs:
   # of the build during CI, even if we don't run that during tests.
   test_makefiles:
     name: "Test (Makefiles) ${{ matrix.make }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     needs: [ checkout, build ]
 
     strategy:
@@ -301,7 +301,7 @@ jobs:
 
   test_san:
     name: "Test (Sanitizers) ${{ matrix.san }} ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     needs: [ build ]
 
     strategy:
@@ -362,7 +362,7 @@ jobs:
 
   test_fuzz:
     name: "Fuzz (mode ${{ matrix.mode }}) ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 5 # this should never be reached, it's a safeguard for bugs in the fuzzer itself
     needs: [ build ]
 
@@ -470,7 +470,7 @@ jobs:
 
   test_pcre:
     name: "Test (PCRE suite) ${{ matrix.lang }} ${{ matrix.san }} ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     needs: [ pcre_suite ] # and also build, but pcre_suite gives us that
 
     strategy:
@@ -531,7 +531,7 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ checkout ]
 
     env:
@@ -582,7 +582,7 @@ jobs:
 
   install:
     name: Install
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ build, docs ]
 
     env:
@@ -643,7 +643,7 @@ jobs:
 
   fpm:
     name: Package ${{ matrix.pkg }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [ install ]
 
     env:
