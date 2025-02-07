@@ -79,7 +79,7 @@ jobs:
       id: cache-build
       with:
         path: ${{ env.build }}
-        key: build-bmake-ubuntu-gcc-DEBUG-AUSAN-${{ github.sha }} # arbitrary build, just for cvtpcre
+        key: build-bmake-ubuntu-gcc-DEBUG-AUSAN-${{ github.sha }} # arbitary build, just for cvtpcre
 
     - name: Convert PCRE suite
       if: steps.cache-cvtpcre.outputs.cache-hit != 'true'
@@ -130,7 +130,7 @@ jobs:
 
   build:
     name: "Build ${{ matrix.san }} ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-22.04
+    runs-on: ubuntu-22.04
     needs: [ checkout ]
 
     strategy:
@@ -174,7 +174,6 @@ jobs:
         uname -a
         sudo apt-get install bmake electric-fence
         ${{ matrix.cc }} --version
-        printenv
 
     - name: Dependencies (MacOS)
       if: matrix.os == 'macos' && steps.cache-build.outputs.cache-hit != 'true'
@@ -217,7 +216,7 @@ jobs:
   # of the build during CI, even if we don't run that during tests.
   test_makefiles:
     name: "Test (Makefiles) ${{ matrix.make }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     needs: [ checkout, build ]
 
     strategy:
@@ -302,7 +301,7 @@ jobs:
 
   test_san:
     name: "Test (Sanitizers) ${{ matrix.san }} ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     needs: [ build ]
 
     strategy:
@@ -363,7 +362,7 @@ jobs:
 
   test_fuzz:
     name: "Fuzz (mode ${{ matrix.mode }}) ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 5 # this should never be reached, it's a safeguard for bugs in the fuzzer itself
     needs: [ build ]
 
@@ -471,7 +470,7 @@ jobs:
 
   test_pcre:
     name: "Test (PCRE suite) ${{ matrix.lang }} ${{ matrix.san }} ${{ matrix.cc }} ${{ matrix.os }} ${{ matrix.debug }}"
-    runs-on: ${{ matrix.os }}-latest
+    runs-on: ubuntu-22.04
     needs: [ pcre_suite ] # and also build, but pcre_suite gives us that
 
     strategy:

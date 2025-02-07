@@ -43,6 +43,8 @@ DEBUG ?= 1
 
 # combined just to save time in CI
 .if defined(AUSAN)
+CFLAGS += -DNOSTRIP
+CC ?= clang-14
 ASAN  ?= 1
 UBSAN ?= 1
 .endif
