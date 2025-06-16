@@ -1309,7 +1309,9 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 	config->state_count = ir->n;
 
 	config->state_info = f_calloc(config->alloc, ir->n, sizeof(config->state_info[0]));
-	assert(config->state_info != NULL);
+	if (config->state_info == NULL) {
+		goto alloc_fail;
+	}
 
 	/* could just memset this to 0xff, but this is explicit */
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
@@ -1323,8 +1325,10 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 	/* add a single entry for 0, in case the IR only has a single IR_NONE or IR_SAME state */
 	config->bitset_words.ceil = 1;
 	config->bitset_words.used = 1;
-	config->bitset_words.pairs = calloc(1, sizeof(config->bitset_words.pairs[0]));
-	assert(config->bitset_words.pairs != NULL);
+	config->bitset_words.pairs = f_calloc(config->alloc, 1, sizeof(config->bitset_words.pairs[0]));
+	if (config->bitset_words.pairs == NULL) {
+		goto alloc_fail;
+	}
 	config->bitset_words.pairs[0].word = 0x0;
 	config->bitset_words.pairs[0].count = 1;
 
@@ -1413,7 +1417,6 @@ not_implemented:
 	return false;
 
 alloc_fail:
-	assert(!"alloc fail");
 	return false;
 }
 
@@ -1434,7 +1437,9 @@ fsm_print_cdata(FILE *f,
 
 	/* First pass, figure out totals and index sizes */
 	struct cdata_config config;
-	populate_config_from_ir(&config, alloc, ir);
+	if (!populate_config_from_ir(&config, alloc, ir)) {
+		return -1;
+	}
 
 #if LOG_SIZES
 	fprintf(stderr, "// config: dst_state_count %zu, start %d, dst_buf.used %zd, endid_buf.used %zd, eager_output_buf.used %zd\n",
