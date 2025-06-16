@@ -1128,14 +1128,14 @@ cmp_bitset_word_pair(const void *pa, const void *pb)
 	return a->count < b->count ? 1 : a->count > b->count ? -1 : 0;
 }
 
-static void
+static bool
 increment_bitset_word_count(const struct fsm_alloc *alloc, struct bitset_words *bws, uint64_t w)
 {
 	/* This table tends to stay fairly small, so linear search is probably good enough. */
 	for (size_t i = 0; i < bws->used; i++) {
 		if (bws->pairs[i].word == w) {
 			bws->pairs[i].count++;
-			return;
+			return true;
 		}
 	}
 
@@ -1143,7 +1143,7 @@ increment_bitset_word_count(const struct fsm_alloc *alloc, struct bitset_words *
 		const size_t nceil = (bws->ceil == 0 ? 8 : 2*bws->ceil);
 		struct bitset_word_pair *npairs = f_realloc(alloc,
 		    bws->pairs, nceil * sizeof(npairs[0]));
-		assert(npairs != NULL);
+		return false;
 		bws->ceil = nceil;
 		bws->pairs = npairs;
 	}
@@ -1152,6 +1152,7 @@ increment_bitset_word_count(const struct fsm_alloc *alloc, struct bitset_words *
 	p->word = w;
 	p->count = 1;
 	bws->used++;
+	return true;
 }
 
 static bool
@@ -1224,8 +1225,12 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 
 	struct bitset_words *bws = &config->bitset_words;
 	for (size_t i = 0; i < 4; i++) {
-		increment_bitset_word_count(config->alloc, bws, si->labels[i]);
-		increment_bitset_word_count(config->alloc, bws, si->label_group_starts[i]);
+		if (!increment_bitset_word_count(config->alloc, bws, si->labels[i])) {
+			return false;
+		}
+		if (!increment_bitset_word_count(config->alloc, bws, si->label_group_starts[i])) {
+			return false;
+		}
 	}
 
 	/* Precompute label_group_starts[] rank sums so lookup only needs to
