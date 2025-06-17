@@ -1139,7 +1139,9 @@ increment_bitset_word_count(const struct fsm_alloc *alloc, struct bitset_words *
 		const size_t nceil = (bws->ceil == 0 ? 8 : 2*bws->ceil);
 		struct bitset_word_pair *npairs = f_realloc(alloc,
 		    bws->pairs, nceil * sizeof(npairs[0]));
-		return false;
+		if (npairs == NULL) {
+			return false;
+		}
 		bws->ceil = nceil;
 		bws->pairs = npairs;
 	}
