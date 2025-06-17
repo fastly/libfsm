@@ -346,6 +346,7 @@ runner_init_compiled(struct fsm *fsm,
 
 	/* we don't override the print hooks for retest */
 	if (!print(fsm, opt, NULL, r->impl, tmp_src)) {
+		fprintf(stderr, "%s: error at line %d\n", __func__, __LINE__);
 		return ERROR_FILE_IO;
 	}
 
@@ -361,23 +362,27 @@ runner_init_compiled(struct fsm *fsm,
 		}
 
 		if (-1 == close(fd_so)) {
+			fprintf(stderr, "%s: error at line %d\n", __func__, __LINE__);
 			perror(tmp_so);
 			return ERROR_FILE_IO;
 		}
 
 		h = dlopen(tmp_so, RTLD_NOW);
 		if (h == NULL) {
+			fprintf(stderr, "%s: error at line %d\n", __func__, __LINE__);
 			fprintf(stderr, "%s: %s", tmp_so, dlerror());
 			return ERROR_FILE_IO;
 		}
 
 		if (-1 == unlinkat(-1, tmp_so, 0)) {
+			fprintf(stderr, "%s: error at line %d\n", __func__, __LINE__);
 			perror(tmp_so);
 			return ERROR_FILE_IO;
 		}
 	}
 
 	if (-1 == unlinkat(-1, tmp_src, 0)) {
+		fprintf(stderr, "%s: error at line %d\n", __func__, __LINE__);
 		perror(tmp_src);
 		return 0;
 	}
@@ -389,6 +394,9 @@ runner_init_compiled(struct fsm *fsm,
 	case IMPL_VMC:
 		r->u.impl_c.h = h;
 		r->u.impl_c.func = (int (*)(const char *, const char *)) (uintptr_t) dlsym(h, "fsm_main");
+		if (r->u.impl_c.func == NULL) {
+			fprintf(stderr, "%s: error at line %d -- dlsym returned NULL\n", __func__, __LINE__);
+		}
 		break;
 
 	case IMPL_VMOPS:
