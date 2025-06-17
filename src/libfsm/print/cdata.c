@@ -183,7 +183,7 @@ struct cdata_config {
 #endif
 };
 
-static bool
+static void
 generate_struct_definition(FILE *f, const struct cdata_config *config, bool comments, const char *prefix)
 {
 	const bool has_endids = config->endid_buf.used > 0;
@@ -305,7 +305,6 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 
 	fprintf(f,
 	    "\t};\n");
-	return true;
 }
 
 static void
@@ -412,7 +411,7 @@ generate_distinct_eager_output_id_table(FILE *f, const struct cdata_config *conf
 	fprintf(f, "\n\t\t},\n");
 }
 
-static bool
+static void
 generate_data(FILE *f, const struct cdata_config *config,
 	bool comments, const char *prefix, const struct ir *ir)
 {
@@ -619,8 +618,6 @@ generate_data(FILE *f, const struct cdata_config *config,
 	}
 
 	fprintf(f, "\t};\n");
-
-	return true;
 }
 
 static void
@@ -655,7 +652,7 @@ generate_eager_output_check(FILE *f, const struct cdata_config *config, const ch
 	}
 }
 
-static bool
+static void
 generate_interpreter(FILE *f, const struct cdata_config *config, const struct fsm_options *opt, const char *prefix)
 {
 	const bool has_endids = config->endid_buf.used > 0;
@@ -872,7 +869,6 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 
 	/* Got a match. */
 	fprintf(f, "\treturn 1; /* match */\n");
-	return true;
 }
 
 static bool
@@ -1530,17 +1526,17 @@ fsm_print_cdata(FILE *f,
 		fprintf(f, ")\n");
 		fprintf(f, "{\n");
 
-		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
-		if (!generate_data(f, &config, opt->comments, prefix, ir)) { return -1; }
-		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
+		generate_struct_definition(f, &config, opt->comments, prefix);
+		generate_data(f, &config, opt->comments, prefix, ir);
+		generate_interpreter(f, &config, opt, prefix);
 
 		fprintf(f, "}\n");
 		fprintf(f, "\n");
 	} else {
 		/* caller sets up the function head */
-		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
-		if (!generate_data(f, &config, opt->comments, prefix, ir)) { return -1; }
-		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
+		generate_struct_definition(f, &config, opt->comments, prefix);
+		generate_data(f, &config, opt->comments, prefix, ir);
+		generate_interpreter(f, &config, opt, prefix);
 	}
 
 	f_free(alloc, config.dst_buf.buf);
