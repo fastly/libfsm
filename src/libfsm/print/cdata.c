@@ -1430,7 +1430,9 @@ fsm_print_cdata(FILE *f,
 
 	/* First pass, figure out totals and index sizes */
 	struct cdata_config config;
-	populate_config_from_ir(&config, alloc, ir);
+	if (!populate_config_from_ir(&config, alloc, ir)) {
+		return -1;
+	}
 
 #if LOG_SIZES
 	fprintf(stderr, "// config: dst_state_count %zu, start %d, dst_buf.used %zd, endid_buf.used %zd, eager_output_buf.used %zd\n",
