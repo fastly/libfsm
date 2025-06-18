@@ -34,7 +34,9 @@
 
 /* Print mode that generates C data literals for the DFA, plus a small interepreter.
  * This mostly exists to sidestep very expensive compilation for large data sets
- * using the other C modes. -sv */
+ * using the other C modes. When they generate long runs of nested switch/case
+ * statements, gcc and clang spend lots of time and RAM on analyzing them, and it
+ * can lead to builds taking several hours or even OOM-ing. -sv */
 
 /* Whether to check the table buffers for previous instances of
  * the same sets of dst_states, endids, and eager_outputs. This
@@ -125,12 +127,14 @@ struct cdata_config {
 	/* numeric type for entries in .bitset_words.pairs[] */
 	enum id_type t_label_word_id;
 
+	/* buffer for edge destination states */
 	struct dst_buf {
 		size_t ceil;
 		size_t used;
 		uint32_t *buf;
 	} dst_buf;
 
+	/* buffer for endids */
 	struct endid_buf {
 		size_t ceil;
 		size_t used;
@@ -138,6 +142,7 @@ struct cdata_config {
 	} endid_buf;
 	size_t max_endid;
 
+	/* buffer for eager output IDs */
 	struct eager_output_buf {
 		size_t ceil;
 		size_t used;
@@ -145,6 +150,9 @@ struct cdata_config {
 	} eager_output_buf;
 	size_t max_eager_output_id;
 
+	/* Collection of distinct eager output IDs, in ascending order.
+	 * This is used to map sequentially allocated internal IDs to the
+	 * caller's eager output IDs, which are just arbitrary integers. */
 	fsm_output_id_t *eager_output_ids;
 	size_t distinct_eager_output_id_count;
 
