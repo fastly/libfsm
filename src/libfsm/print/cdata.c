@@ -25,6 +25,8 @@
 #include <fsm/print.h>
 #include <fsm/options.h>
 
+#include <adt/stateset.h>
+
 #include "libfsm/internal.h"
 #include "libfsm/print.h"
 
@@ -32,8 +34,9 @@
 
 /* Print mode that generates C data literals for the DFA, plus a small interepreter.
  * This mostly exists to sidestep very expensive compilation for large data sets
- * using the other C modes. -sv */
-
+ * using the other C modes. When they generate long runs of nested switch/case
+ * statements, gcc and clang spend lots of time and RAM on analyzing them, and it
+ * can lead to builds taking several hours or even OOM-ing. -sv */
 
 /* Whether to check the table buffers for previous instances of
  * the same sets of dst_states, endids, and eager_outputs. This
@@ -119,13 +122,19 @@ struct cdata_config {
 	/* numeric types for endid and eager_output table values */
 	enum id_type t_endid_value;
 	enum id_type t_eager_output_value;
+	enum id_type t_distinct_eager_output_offset;
 
+	/* numeric type for entries in .bitset_words.pairs[] */
+	enum id_type t_label_word_id;
+
+	/* buffer for edge destination states */
 	struct dst_buf {
 		size_t ceil;
 		size_t used;
 		uint32_t *buf;
 	} dst_buf;
 
+	/* buffer for endids */
 	struct endid_buf {
 		size_t ceil;
 		size_t used;
@@ -133,12 +142,19 @@ struct cdata_config {
 	} endid_buf;
 	size_t max_endid;
 
+	/* buffer for eager output IDs */
 	struct eager_output_buf {
 		size_t ceil;
 		size_t used;
 		uint64_t *buf;
 	} eager_output_buf;
 	size_t max_eager_output_id;
+
+	/* Collection of distinct eager output IDs, in ascending order.
+	 * This is used to map sequentially allocated internal IDs to the
+	 * caller's eager output IDs, which are just arbitrary integers. */
+	fsm_output_id_t *eager_output_ids;
+	size_t distinct_eager_output_id_count;
 
 	struct state_info {
 		uint64_t labels[256/64];
@@ -154,6 +170,17 @@ struct cdata_config {
 		size_t eager_output;
 	} *state_info;
 
+	/* Collected 64-bit word counts for the .labels and
+	 * .label_group_starts 256-bitsets. */
+	struct bitset_words {
+		size_t used;
+		size_t ceil;
+		struct bitset_word_pair {
+			uint64_t word;
+			size_t count;
+		} *pairs;
+	} bitset_words;
+
 #if LOG_REUSE
 	struct reuse_stats {
 		size_t miss;
@@ -164,7 +191,7 @@ struct cdata_config {
 #endif
 };
 
-static bool
+static void
 generate_struct_definition(FILE *f, const struct cdata_config *config, bool comments, const char *prefix)
 {
 	const bool has_endids = config->endid_buf.used > 0;
@@ -174,24 +201,20 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	    "\ttypedef %s %s_cdata_state;\n",
 	    id_type_str(config->t_state_id), prefix);
 
-	/* TODO: move .end and .endid_offset into a separate table, they aren't accessed
-	 * until the end of input, so this should slightly reduce cache misses.
-	 * Do this once there's baseline timing info. */
 	fprintf(f,
 	    "\tstruct %s_cdata_dfa {\n"
 	    "\t\t%s_cdata_state start;\n"
 	    "\t\tstruct %s_cdata_state {\n"
-	    "\t\t\tbool end; /* is this an end state? */\n"
 	    "\n", prefix, prefix, prefix);
 
 	if (comments) {
 		fprintf(f,
 		    "\t\t\t/* To find the destination state for label character C,\n"
-		    "\t\t\t * check if the bit C is set in .labels[]. If so, find the\n"
-		    "\t\t\t * the 1 bit at or preceding C in .label_group_starts[],\n"
-		    "\t\t\t * which represents the start of the Nth label group, the\n"
-		    "\t\t\t * group label group that contains C. The dst state will be in\n"
-		    "\t\t\t * .dst_table[.dst_table_offset + N]. This offset N is called\n"
+		    "\t\t\t * check if the bit C is set in the word id'd by .labels[].\n"
+		    "\t\t\t * If so, find the the 1 bit at or preceding C in\n"
+		    "\t\t\t * .label_group_starts[], which represents the start of the Nth\n"
+		    "\t\t\t * label group, the group label group that contains C. The dst state will\n"
+		    "\t\t\t * be in .dst_table[.dst_table_offset + N]. This offset N is called\n"
 		    "\t\t\t * the rank, and .rank_sums has precomputed sums for each\n"
 		    "\t\t\t * word preceding .label_group_starts[C/64]. If .labels[]\n"
 		    "\t\t\t * isn't set for C, the destination is .default_dst, or the\n"
@@ -200,19 +223,19 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	}
 	fprintf(f,
 	    "\t\t\t%s_cdata_state default_dst; /* or %zu for NONE */\n"
-	    "\t\t\tuint64_t labels[256/4]; /* which labels have non-default edges */\n"
-	    "\t\t\tuint64_t label_group_starts[256/4]; /* start of each label group */\n"
+	    "\t\t\t%s label_word_ids[4]; /* which labels have non-default edges */\n"
+	    "\t\t\t%s label_group_start_word_ids[4]; /* start of each label group */\n"
 	    "\t\t\tuint8_t rank_sums[4]; /* rank at end of label_group_starts[n] */\n"
-	    "\n", prefix, config->state_count);
+	    "\n",
+	    prefix, config->state_count,
+	    id_type_str(config->t_label_word_id),
+	    id_type_str(config->t_label_word_id));
 
 	if (comments) {
 		fprintf(f, "\t\t\t/* Offsets into values in other tables */\n");
 	}
 	fprintf(f, "\t\t\t%s dst_table_offset;\n", id_type_str(config->t_dst_state_offset));
 
-	if (has_endids) {
-		fprintf(f, "\t\t\t%s endid_offset;\n", id_type_str(config->t_endid_offset));
-	}
 	if (has_eager_outputs) {
 		fprintf(f, "\t\t\t%s eager_output_offset;\n", id_type_str(config->t_eager_output_offset));
 	}
@@ -220,6 +243,29 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 	fprintf(f,
 	    "\t\t} states[%zd];\n"
 	    "\n", config->state_count);
+
+	/* .end could be a single uint64_t bitset */
+	if (comments) {
+		fprintf(f, "\t\t/* State-associated info only checked at end of input */\n");
+	}
+	fprintf(f,
+	    "\t\tstruct %s_state_end_info {\n"
+	    "\t\t\tbool end; /* is this an end state? */\n", prefix);
+	if (has_endids) {
+		fprintf(f, "\t\t\t%s endid_offset; /* or %zu for NONE */\n",
+		    id_type_str(config->t_endid_offset), config->endid_buf.used);
+	}
+	fprintf(f,
+	    "\t\t} state_end_info[%zd];\n"
+	    "\n", config->state_count);
+
+	if (comments) {
+		fprintf(f,
+		    "\t\t/* Table of individual words used in label and label_group_start\n"
+		    "\t\t *  bitsets, in descending order by frequency. */\n");
+	}
+	fprintf(f,
+	    "\t\tuint64_t label_word_table[%zd];\n", config->bitset_words.used);
 
 	if (comments) {
 		fprintf(f,
@@ -251,15 +297,129 @@ generate_struct_definition(FILE *f, const struct cdata_config *config, bool comm
 			    "\t\t * terminated by non-increasing value. */\n");
 		}
 		fprintf(f, "\t\t%s eager_output_table[%zd + 1];\n",
-		    id_type_str(config->t_eager_output_value), config->eager_output_buf.used);
+		    id_type_str(config->t_distinct_eager_output_offset), config->eager_output_buf.used);
+
+		if (comments) {
+			fprintf(f,
+			    "\n"
+			    "\t\t/* All distinct eager_output ID that appear in the DFA,\n"
+			    "\t\t * in ascending order. Used to convert the dense bitset for\n"
+			    "\t\t * eager_outputs reached one or more times with their values. */\n");
+		}
+		fprintf(f, "\t\t%s eager_output_ids[%zd + 1];\n",
+		    id_type_str(config->t_eager_output_value),
+		    config->distinct_eager_output_id_count);
 	}
 
 	fprintf(f,
 	    "\t};\n");
-	return true;
+}
+
+static void
+lookup_label_ids(const struct cdata_config *config, const uint64_t *labels, unsigned ids[4]) {
+	for (size_t w_i = 0; w_i < 4; w_i++) {
+		bool found = false;
+		const uint64_t w = labels[w_i];
+		for (size_t i = 0; i < config->bitset_words.used; i++) {
+			if (config->bitset_words.pairs[i].word == w) {
+				ids[w_i] = i;
+				found = true;
+				break;
+			}
+		}
+		assert(found);
+	}
+}
+
+static int
+cmp_eager_output_id(const void *pa, const void *pb)
+{
+	const fsm_output_id_t a = *(const fsm_output_id_t *)pa;
+	const fsm_output_id_t b = *(const fsm_output_id_t *)pb;
+	return a < b ? -1 : a > b ? 1 : 0;
 }
 
 static bool
+collect_distinct_eager_output_ids(struct cdata_config *config,
+    const struct ir *ir)
+{
+	bool res = false;
+	fsm_output_id_t *id_array = NULL;
+
+	/* state set, used as an fsm_output_id_t set. Both are unsigned int. */
+	struct state_set *ids = NULL;
+
+	if (config->eager_output_buf.used > 0) {
+		/* Add value of 0 at offset 0, because it's used as a list terminator. */
+		if (!state_set_add(&ids, config->alloc, 0)) {
+			goto cleanup;
+		}
+	}
+
+	for (size_t s_i = 0; s_i < ir->n; s_i++) {
+		const struct ir_state *s = &ir->states[s_i];
+		struct ir_state_eager_output *eos = s->eager_outputs;
+		if (eos == NULL) { continue; }
+
+		for (size_t id_i = 0; id_i < eos->count; id_i++) {
+			const fsm_output_id_t id = eos->ids[id_i];
+			/* fprintf(stderr, "%s: state %zu, id %u\n", __func__, s_i, id); */
+			if (!state_set_add(&ids, config->alloc, (fsm_state_t)id)) {
+				goto cleanup;
+			}
+		}
+	}
+
+	config->distinct_eager_output_id_count = 0;
+	config->eager_output_ids = NULL;
+
+	const size_t distinct_eager_output_ids = state_set_count(ids);
+	if (distinct_eager_output_ids == 0) {
+		state_set_free(ids);
+		return true;	/* nothing to do */
+	}
+
+	id_array = f_malloc(config->alloc, distinct_eager_output_ids * sizeof(id_array[0]));
+	if (id_array == NULL) { goto cleanup; }
+
+	struct state_iter iter;
+	state_set_reset(ids, &iter);
+	fsm_state_t s_id;
+	while (state_set_next(&iter, &s_id)) {
+		id_array[config->distinct_eager_output_id_count++] = (fsm_output_id_t)s_id;
+	}
+	assert(config->distinct_eager_output_id_count == distinct_eager_output_ids);
+	qsort(id_array, distinct_eager_output_ids, sizeof(id_array[0]), cmp_eager_output_id);
+
+	config->eager_output_ids = id_array;
+	/* fprintf(stderr, "/// distinct eager outputs:\n");
+	 * for (size_t i = 0; i < config->distinct_eager_output_id_count; i++) {
+	 * 	fprintf(stderr, "-- %zu: %zu\n", i, (size_t)id_array[i]);
+	 * } */
+
+	state_set_free(ids);
+	return true;
+
+cleanup:
+	f_free(config->alloc, id_array);
+	state_set_free(ids);
+	return res;
+}
+
+static void
+generate_distinct_eager_output_id_table(FILE *f, const struct cdata_config *config)
+{
+	assert(config->distinct_eager_output_id_count > 0);
+
+	fprintf(f, "\t\t.eager_output_ids = {\n\t\t\t");
+	for (size_t i = 0; i < config->distinct_eager_output_id_count; i++) {
+		fprintf(f, " %u,", config->eager_output_ids[i]);
+		if ((i & 15) == 15) { fprintf(f, "\n\t\t\t"); }
+	}
+	fprintf(f, "\n\t\t},\n");
+}
+
+static void
 generate_data(FILE *f, const struct cdata_config *config,
 	bool comments, const char *prefix, const struct ir *ir)
 {
@@ -272,8 +432,6 @@ generate_data(FILE *f, const struct cdata_config *config,
 		const struct ir_state *s = &ir->states[s_i];
 		const struct state_info *si = &config->state_info[s_i];
 
-		const bool is_end = s->isend;
-		const bool has_endids = si->endid != STATE_OFFSET_NONE;
 		const bool has_eager_outputs = si->eager_output != STATE_OFFSET_NONE;
 
 		fprintf(f, "\t\t\t[%zd] = {%s\n", s_i, s_i == config->start ? " /* start */" : "");
@@ -289,8 +447,10 @@ generate_data(FILE *f, const struct cdata_config *config,
 			}
 			fprintf(f, "\n");
 		}
-		fprintf(f, "\t\t\t\t.labels = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
-		    si->labels[0], si->labels[1], si->labels[2], si->labels[3]);
+		unsigned label_ids[4];
+		lookup_label_ids(config, si->labels, label_ids);
+		fprintf(f, "\t\t\t\t.label_word_ids = { %u, %u, %u, %u },\n",
+		    label_ids[0], label_ids[1], label_ids[2], label_ids[3]);
 
 		size_t dst_count = 0;
 		if (comments) {
@@ -305,8 +465,9 @@ generate_data(FILE *f, const struct cdata_config *config,
 			}
 			fprintf(f, "\n");
 		}
-		fprintf(f, "\t\t\t\t.label_group_starts = { 0x%lx, 0x%lx, 0x%lx, 0x%lx },\n",
-		    si->label_group_starts[0], si->label_group_starts[1], si->label_group_starts[2], si->label_group_starts[3]);
+		lookup_label_ids(config, si->label_group_starts, label_ids);
+		fprintf(f, "\t\t\t\t.label_group_start_word_ids = { %u, %u, %u, %u },\n",
+		    label_ids[0], label_ids[1], label_ids[2], label_ids[3]);
 
 		/* rank_sums[0] is always 0, but allows us to avoid a subtraction in the inner loop,
 		 * and the space would be wasted otherwise anyway due to alignment. */
@@ -315,7 +476,6 @@ generate_data(FILE *f, const struct cdata_config *config,
 
 		const size_t state_NONE = config->state_count;
 		const size_t dst_table_NONE = config->dst_buf.used;
-		const size_t endid_NONE = config->endid_buf.used;
 		const size_t eager_output_NONE = config->eager_output_buf.used;
 
 		if (si->default_dst == STATE_OFFSET_NONE) {
@@ -331,32 +491,10 @@ generate_data(FILE *f, const struct cdata_config *config,
 			fprintf(f, "\t\t\t\t.default_dst = %zu,\n", si->default_dst);
 		}
 
-		fprintf(f, "\t\t\t\t.end = %d,\n", is_end);
-
 		if (si->dst == STATE_OFFSET_NONE) { /* no non-default outgoing edges */
 			fprintf(f, "\t\t\t\t.dst_table_offset = %zd, /* NONE */\n", dst_table_NONE);
 		} else {
 			fprintf(f, "\t\t\t\t.dst_table_offset = %zd,\n", si->dst);
-		}
-
-		/* Only include these if any state uses endids/eager_outputs, and
-		 * if this state doesn't then use the end of the array as NONE. */
-		if (config->endid_buf.used > 0) {
-			if (has_endids) {
-				if (comments) {
-					fprintf(f, "\t\t\t\t/* endids:");
-					for (size_t i = 0; i < s->endids.count; i++) {
-						if (i > 0 && (i & 15) == 0) {
-							fprintf(f, "\n\t\t\t\t *");
-						}
-						fprintf(f, " %u", s->endids.ids[i]);
-					}
-					fprintf(f, " */\n");
-				}
-				fprintf(f, "\t\t\t\t.endid_offset = %zd,\n", si->endid);
-			} else {
-				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* NONE */\n", endid_NONE);
-			}
 		}
 
 		if (config->eager_output_buf.used > 0) {
@@ -379,6 +517,51 @@ generate_data(FILE *f, const struct cdata_config *config,
 
 		fprintf(f, "\t\t\t},\n");
 	}
+	fprintf(f, "\t\t},\n");
+
+	fprintf(f, "\t\t.state_end_info = {\n");
+	for (size_t s_i = 0; s_i < ir->n; s_i++) {
+		const size_t endid_NONE = config->endid_buf.used;
+		const struct ir_state *s = &ir->states[s_i];
+		const struct state_info *si = &config->state_info[s_i];
+		fprintf(f, "\t\t\t[%zu] = {\n", s_i);
+		fprintf(f, "\t\t\t\t.end = %d,\n", s->isend);
+
+		/* Only include these if any state uses endids/eager_outputs, and
+		 * if this state doesn't then use the end of the array as NONE. */
+		if (config->endid_buf.used > 0) {
+			if (si->endid != STATE_OFFSET_NONE) {
+				if (comments) {
+					fprintf(f, "\t\t\t\t/* endids:");
+					for (size_t i = 0; i < s->endids.count; i++) {
+						if (i > 0 && (i & 15) == 0) {
+							fprintf(f, "\n\t\t\t\t *");
+						}
+						fprintf(f, " %u", s->endids.ids[i]);
+					}
+					fprintf(f, " */\n");
+				}
+				fprintf(f, "\t\t\t\t.endid_offset = %zd,\n", si->endid);
+			} else {
+				fprintf(f, "\t\t\t\t.endid_offset = %zd, /* NONE */\n", endid_NONE);
+			}
+		}
+		fprintf(f, "\t\t\t},\n");
+	}
+	fprintf(f, "\t\t},\n");
+
+	fprintf(f,
+	    "\t\t.label_word_table = {\n\t\t\t");
+	for (size_t i = 0; i < config->bitset_words.used; i++) {
+		fprintf(f, " 0x%016lx,", config->bitset_words.pairs[i].word);
+		if ((i & 3) == 3) {
+			fprintf(f, "\n\t\t\t");
+		}
+	}
+	if ((config->bitset_words.used & 3) != 3) {
+		fprintf(f, "\n");
+	}
+
 	fprintf(f, "\t\t},\n");
 
 	fprintf(f,
@@ -408,17 +591,41 @@ generate_data(FILE *f, const struct cdata_config *config,
 
 	if (config->eager_output_buf.used > 0) {
 		fprintf(f, "\t\t.eager_output_table = {");
+
 		for (size_t i = 0; i < config->eager_output_buf.used; i++) {
 			if ((i & 15) == 0) { fprintf(f, "\n\t\t\t"); }
-			fprintf(f, " %lu,", config->eager_output_buf.buf[i]);
+			/* TODO This uses linear search and does redundant lookups, but
+			 * the distinct eager_output IDs should be fairly small.
+			 * This could be replaced with an id->offset map later.
+			 *
+			 * Note: Non-ascending values are used as a list terminator in
+			 * both the original and remapped sets -- because 0 was added
+			 * at the start of collect_distinct_eager_output_ids, it will
+			 * stay as 0, and since the list of distinct IDs is sorted the
+			 * mapping will preserve the relative order -- non-ascending
+			 * values terminating runs of IDs will still be non-ascending. */
+			fsm_output_id_t id = config->eager_output_buf.buf[i];
+			unsigned id_offset = (unsigned)-1;
+			for (unsigned i = 0; i < config->distinct_eager_output_id_count; i++) {
+				if (config->eager_output_ids[i] == id) {
+					id_offset = i;
+					break;
+				}
+			}
+			assert(id_offset != (unsigned)-1); /* found */
+			fprintf(f, " %u,", id_offset);
 		}
 		fprintf(f, "\n\t\t\t 0 /* end */,\n");
 		fprintf(f, "\n\t\t},\n");
+
+		/* Emit a sorted table of all the distinct eager output
+		 * values. This, along with a bitset stack-allocated by
+		 * the interpreter, will be used to keep track of which
+		 * eager outputs should be set if the DFA as a whole matches. */
+		generate_distinct_eager_output_id_table(f, config);
 	}
 
 	fprintf(f, "\t};\n");
-
-	return true;
 }
 
 static void
@@ -441,19 +648,19 @@ generate_eager_output_check(FILE *f, const struct cdata_config *config, const ch
 		    "\t\t\t\tif (debug_traces) {\n"
 		    "\t\t\t\t\tfprintf(stderr, \"%%s: setting eager_output flag %%u\\n\", __func__, cur);\n"
 		    "\t\t\t\t}\n"
-		    "\t\t\t\teager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
+		    "\t\t\t\tuncommitted_eager_output_buf[cur/64] |= (uint64_t)1 << (cur & 63);\n"
 		    "\t\t\t\teo_scan++;\n"
 		    "\t\t\t\tnext = *eo_scan;\n"
 		    "\t\t\t} while (next > cur);\n"
 		    "\t\t}\n",
 		    prefix,
-		    id_type_str(config->t_eager_output_value),
+		    id_type_str(config->t_distinct_eager_output_offset),
 		    prefix,
-		    id_type_str(config->t_eager_output_value));
+		    id_type_str(config->t_distinct_eager_output_offset));
 	}
 }
 
-static bool
+static void
 generate_interpreter(FILE *f, const struct cdata_config *config, const struct fsm_options *opt, const char *prefix)
 {
 	const bool has_endids = config->endid_buf.used > 0;
@@ -472,6 +679,15 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	/* start state */
 	fprintf(f, "\tuint32_t cur_state = %s_dfa_data.start;\n", prefix);
 	fprintf(f, "\n");
+
+	/* Stack-allocated bitset buffer for uncommitted eager_outputs: if the Nth bit in this
+	 * buffer is set, then after a successful DFA match the ID in dfa.eager_output_ids[N]
+	 * should be reported as matching. The bitset is used to collect redundant eager_outputs,
+	 * and to avoid reporting them to the caller until the overall DFA match result is known. */
+	if (config->distinct_eager_output_id_count > 0) {
+		const size_t eager_output_words = config->distinct_eager_output_id_count/64 + 1;
+		fprintf(f, "\tuint64_t uncommitted_eager_output_buf[%zu] = {0};\n", eager_output_words);
+	}
 
 	/* Setting this to true will log out execution steps. */
 	const bool debug_traces = false;
@@ -540,11 +756,14 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\tconst size_t w_i = c/64;\n"
 	    "\t\tconst size_t word_rem = c & 63;\n"
 	    "\t\tconst uint64_t bit = (uint64_t)1 << word_rem;\n"
-	    "\t\tif (state->labels[w_i] & bit) { /* if state has label */\n"
+	    "\t\tconst %s label_word_id = state->label_word_ids[w_i];\n"
+	    "\t\tconst uint64_t label_word = %s_dfa_data.label_word_table[label_word_id];\n"
+	    "\t\tif (label_word & bit) { /* if state has label */\n"
 	    "\t\t\tif (debug_traces) {\n"
 	    "\t\t\t\tfprintf(stderr, \"-- label '%%c' (0x%%02x) -> w_i %%zd, bit 0x%%016lx\\n\", isprint(c) ? c : 'c', c, w_i, bit);\n"
 	    "\t\t\t}\n"
-	    "\t\t\tconst uint64_t lgs_word = state->label_group_starts[w_i];\n"
+	    "\t\t\tconst uint64_t lgs_word_id = state->label_group_start_word_ids[w_i];\n"
+	    "\t\t\tconst uint64_t lgs_word = %s_dfa_data.label_word_table[lgs_word_id];\n"
 	    "\t\t\tconst size_t back = (lgs_word & bit) ? 0 : 1; /* back to start of label group */\n"
 	    "\t\t\tconst uint64_t mask = bit - 1;\n"
 	    "\t\t\tconst uint64_t masked_word = lgs_word & mask;\n"
@@ -569,13 +788,14 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	    "\t\t\treturn 0; /* no match */\n"
 	    "\t\t}\n"
 	    "\t}\n",
-	    popcount, prefix, prefix);
+	    id_type_str(config->t_label_word_id),
+	    prefix, prefix, popcount, prefix, prefix);
 
 	/* At the end of the input, check if the current state is an end.
 	 * If not, there's no match.  */
 	fprintf(f,
-	    "\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n"
-	    "\tif (!state->end) { return 0; /* no match */ }\n", prefix, prefix);
+	    "\tconst struct %s_state_end_info *state_end = &%s_dfa_data.state_end_info[cur_state];\n"
+	    "\tif (!state_end->end) { return 0; /* no match */ }\n", prefix, prefix);
 
 	/* Set the passed-in reference to the endids, if any. */
 	if (has_endids) {
@@ -586,8 +806,8 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 		 * by the first lower value. endid_table[] has an extra 0 appended
 		 * as a terminator for the last set. */
 		fprintf(f,
-		    "\tif (state->endid_offset < %s_ENDID_TABLE_COUNT) {\n"
-		    "\t\t%s *endid_scan = &%s_dfa_data.endid_table[state->endid_offset];\n"
+		    "\tif (state_end->endid_offset < %s_ENDID_TABLE_COUNT) {\n"
+		    "\t\t%s *endid_scan = &%s_dfa_data.endid_table[state_end->endid_offset];\n"
 		    "\t\tconst %s *endid_base = endid_scan;\n"
 		    "\t\tsize_t endid_count = 0;\n"
 		    "\t\tuint64_t cur, next;\n"
@@ -634,11 +854,29 @@ generate_interpreter(FILE *f, const struct cdata_config *config, const struct fs
 	}
 
 	/* If the end state has eager_outputs, set their flags. */
-	generate_eager_output_check(f, config, prefix);
+	if (has_eager_outputs) {
+		fprintf(f, "\t{\n");	/* add {} nesting so the tabs match */
+		fprintf(f, "\t\tconst struct %s_cdata_state *state = &%s_dfa_data.states[cur_state];\n",
+		    prefix, prefix);
+		generate_eager_output_check(f, config, prefix);
+		fprintf(f, "\t}\n");
+
+		/* commit eager_output matches to the caller's buffer */
+		const size_t eager_output_words = config->distinct_eager_output_id_count/64 + 1;
+		fprintf(f, "\tfor (size_t w_i = 0; w_i < %zu; w_i++) {\n", eager_output_words);
+		fprintf(f, "\t\tconst uint64_t w = uncommitted_eager_output_buf[w_i];\n");
+		fprintf(f, "\t\tif (w == 0) { continue; }\n");
+		fprintf(f, "\t\tfor (size_t bit = 0; bit < 64; bit++) {\n");
+		fprintf(f, "\t\t\tif (w & ((uint64_t)1 << bit)) {\n");
+		fprintf(f, "\t\t\t\tconst uint64_t id = %s_dfa_data.eager_output_ids[64*w_i + bit];\n", prefix);
+		fprintf(f, "\t\t\t\teager_output_buf[id/64] |= ((uint64_t)1 << (id & 63));\n");
+		fprintf(f, "\t\t\t}\n");
+		fprintf(f, "\t\t}\n");
+		fprintf(f, "\t}\n");
+	}
 
 	/* Got a match. */
 	fprintf(f, "\treturn 1; /* match */\n");
-	return true;
 }
 
 static bool
@@ -694,8 +932,8 @@ save_state_endids(struct cdata_config *config, const struct ir_state_endids *end
 			}
 		}
 
-		/* If there's a potential match, check that it isn't followed by
-		 * a value > the last, because it would falsely continue the run. */
+		/* If there's a potential match, check that it is followed by
+		 * a value <= the last, because otherwise it would falsely continue the run. */
 		if (e_i == endids->count
 		    && b_i + e_i + 1 < config->endid_buf.used
 		    && config->endid_buf.buf[b_i + e_i + 1] <= endids->ids[e_i - 1]) {
@@ -884,6 +1122,45 @@ append_dst(const struct fsm_alloc *alloc, struct dst_buf *buf, uint32_t dst)
 	return true;
 }
 
+static int
+cmp_bitset_word_pair(const void *pa, const void *pb)
+{
+	const struct bitset_word_pair *a = (const struct bitset_word_pair *)pa;
+	const struct bitset_word_pair *b = (const struct bitset_word_pair *)pb;
+
+	/* for sorting by descending count */
+	return a->count < b->count ? 1 : a->count > b->count ? -1 : 0;
+}
+
+static bool
+increment_bitset_word_count(const struct fsm_alloc *alloc, struct bitset_words *bws, uint64_t w)
+{
+	/* This table tends to stay fairly small, so linear search is probably good enough. */
+	for (size_t i = 0; i < bws->used; i++) {
+		if (bws->pairs[i].word == w) {
+			bws->pairs[i].count++;
+			return true;
+		}
+	}
+
+	if (bws->used == bws->ceil) {
+		const size_t nceil = (bws->ceil == 0 ? 8 : 2*bws->ceil);
+		struct bitset_word_pair *npairs = f_realloc(alloc,
+		    bws->pairs, nceil * sizeof(npairs[0]));
+		if (npairs == NULL) {
+			return false;
+		}
+		bws->ceil = nceil;
+		bws->pairs = npairs;
+	}
+
+	struct bitset_word_pair *p = &bws->pairs[bws->used];
+	p->word = w;
+	p->count = 1;
+	bws->used++;
+	return true;
+}
+
 static bool
 save_state_edge_group_destinations(struct cdata_config *config, struct state_info *si,
 	size_t group_count, const struct ir_group *groups)
@@ -949,6 +1226,16 @@ save_state_edge_group_destinations(struct cdata_config *config, struct state_inf
 			const uint8_t c8 = (uint8_t)c;
 			assert(!u64bitset_get(si->labels, c8));
 			u64bitset_set(si->labels, c8);
+		}
+	}
+
+	struct bitset_words *bws = &config->bitset_words;
+	for (size_t i = 0; i < 4; i++) {
+		if (!increment_bitset_word_count(config->alloc, bws, si->labels[i])) {
+			return false;
+		}
+		if (!increment_bitset_word_count(config->alloc, bws, si->label_group_starts[i])) {
+			return false;
 		}
 	}
 
@@ -1033,7 +1320,9 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 	config->state_count = ir->n;
 
 	config->state_info = f_calloc(config->alloc, ir->n, sizeof(config->state_info[0]));
-	assert(config->state_info != NULL);
+	if (config->state_info == NULL) {
+		goto alloc_fail;
+	}
 
 	/* could just memset this to 0xff, but this is explicit */
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
@@ -1043,6 +1332,16 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 		si->endid = STATE_OFFSET_NONE;
 		si->eager_output = STATE_OFFSET_NONE;
 	}
+
+	/* add a single entry for 0, in case the IR only has a single IR_NONE or IR_SAME state */
+	config->bitset_words.ceil = 1;
+	config->bitset_words.used = 1;
+	config->bitset_words.pairs = f_calloc(config->alloc, 1, sizeof(config->bitset_words.pairs[0]));
+	if (config->bitset_words.pairs == NULL) {
+		goto alloc_fail;
+	}
+	config->bitset_words.pairs[0].word = 0x0;
+	config->bitset_words.pairs[0].count = 1;
 
 	for (size_t s_i = 0; s_i < ir->n; s_i++) {
 		const struct ir_state *s = &ir->states[s_i];
@@ -1091,6 +1390,10 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 		}
 	}
 
+	if (!collect_distinct_eager_output_ids(config, ir)) {
+		goto alloc_fail;
+	}
+
 	/* Get the smallest numeric type that will fit all state IDs in
 	 * the current DFA, reserving one extra to use as an out-of-band
 	 * "NONE" value for fields like default_dst. These also the values
@@ -1110,7 +1413,14 @@ populate_config_from_ir(struct cdata_config *config, const struct fsm_alloc *all
 	 * a pointer to the array of IDs. */
 	config->t_endid_value = UNSIGNED; //size_needed(config->max_endid);
 
+	/* Sort by use frequency, descending, so the most frequently used
+	 * bitset words will stay in cache. */
+	qsort(config->bitset_words.pairs, config->bitset_words.used,
+	    sizeof(config->bitset_words.pairs[0]), cmp_bitset_word_pair);
+	config->t_label_word_id = size_needed(config->bitset_words.used);
+
 	config->t_eager_output_value = size_needed(config->max_eager_output_id);
+	config->t_distinct_eager_output_offset = size_needed(config->distinct_eager_output_id_count);
 	return true;
 
 not_implemented:
@@ -1118,7 +1428,6 @@ not_implemented:
 	return false;
 
 alloc_fail:
-	assert(!"alloc fail");
 	return false;
 }
 
@@ -1139,7 +1448,9 @@ fsm_print_cdata(FILE *f,
 
 	/* First pass, figure out totals and index sizes */
 	struct cdata_config config;
-	populate_config_from_ir(&config, alloc, ir);
+	if (!populate_config_from_ir(&config, alloc, ir)) {
+		return -1;
+	}
 
 #if LOG_SIZES
 	fprintf(stderr, "// config: dst_state_count %zu, start %d, dst_buf.used %zd, endid_buf.used %zd, eager_output_buf.used %zd\n",
@@ -1235,23 +1546,25 @@ fsm_print_cdata(FILE *f,
 		fprintf(f, ")\n");
 		fprintf(f, "{\n");
 
-		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
-		if (!generate_data(f, &config, opt->comments, prefix, ir)) { return -1; }
-		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
+		generate_struct_definition(f, &config, opt->comments, prefix);
+		generate_data(f, &config, opt->comments, prefix, ir);
+		generate_interpreter(f, &config, opt, prefix);
 
 		fprintf(f, "}\n");
 		fprintf(f, "\n");
 	} else {
 		/* caller sets up the function head */
-		if (!generate_struct_definition(f, &config, opt->comments, prefix)) { return -1; }
-		if (!generate_data(f, &config, opt->comments, prefix, ir)) { return -1; }
-		if (!generate_interpreter(f, &config, opt, prefix)) { return -1; }
+		generate_struct_definition(f, &config, opt->comments, prefix);
+		generate_data(f, &config, opt->comments, prefix, ir);
+		generate_interpreter(f, &config, opt, prefix);
 	}
 
 	f_free(alloc, config.dst_buf.buf);
 	f_free(alloc, config.endid_buf.buf);
 	f_free(alloc, config.eager_output_buf.buf);
+	f_free(alloc, config.bitset_words.pairs);
 	f_free(alloc, config.state_info);
+	f_free(alloc, config.eager_output_ids);
 
 	return 0;
 }

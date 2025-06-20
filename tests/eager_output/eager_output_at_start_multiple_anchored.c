@@ -1,10 +1,12 @@
 #include "utils.h"
 
-/* Fuzzer regresison */
 int main(void)
 {
 	struct eager_output_test test = {
-		.patterns =  { "^", "" },
+		.patterns = {
+			[0] = "$",
+			[1] = "^$",
+		},
 		.inputs = {
 			{ .input = "", .expected_ids = { 1, 2 } },
 		},

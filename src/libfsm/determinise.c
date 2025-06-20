@@ -240,6 +240,7 @@ fsm_determinise_with_config(struct fsm *nfa,
 			assert(dfa->states[m->dfastate].edges == NULL);
 
 			dfa->states[m->dfastate].edges = m->edges;
+			m->edges = NULL; /* transfer ownership */
 
 			/*
 			 * The current DFA state is an end state if any of its associated NFA
@@ -616,6 +617,8 @@ map_free(struct map *map)
 		if (b == NULL) {
 			continue;
 		}
+		/* free any edge sets that didn't get transferred */
+		edge_set_free(map->alloc, b->edges);
 		f_free(map->alloc, b);
 	}
 

@@ -1232,7 +1232,15 @@ main(int argc, char *argv[])
 	int optlevel = 1;
 
 	/* is output to a tty or not? */
-	tty_output = isatty(fileno(stdout));
+	int fileno_stdout = fileno(stdout);
+	if (fileno_stdout == -1) {
+		perror("fileno");
+	} else {
+		tty_output = isatty(fileno_stdout);
+		if (tty_output == -1) {
+			perror("isatty");
+		}
+	}
 
 	/* note these defaults are the opposite than for fsm(1) */
 	opt.anonymous_states  = 1;
