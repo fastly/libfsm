@@ -16,8 +16,6 @@ jobs:
   checkout:
     name: "Checkout"
     runs-on: ubuntu-22.04
-    run: |
-      mkdir -p ${{ env.wc }}
 
     steps:
     - name: Cache checkout
